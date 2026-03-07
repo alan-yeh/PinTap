@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PinTap</title>
+    <style>
+      body {
+        margin: 0;
+        width: 300px;
+        padding: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      label {
+        font-size: 13px;
+      }
+      input,
+      select,
+      button {
+        border-radius: 8px;
+        border: 1px solid #334155;
+        padding: 6px 8px;
+        background: #1e293b;
+        color: #e2e8f0;
+      }
+      button {
+        cursor: pointer;
+        width: 100%;
+      }
+      #status {
+        font-size: 12px;
+        color: #93c5fd;
+        min-height: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <label for="enabled">启用 PinTap</label>
+      <input id="enabled" type="checkbox" />
+    </div>
+    <div class="row">
+      <label for="triggerMode">触发模式</label>
+      <select id="triggerMode">
+        <option value="single">按下一次</option>
+        <option value="repeat">按住连发</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="repeatIntervalMs">连发间隔(ms)</label>
+      <input id="repeatIntervalMs" type="number" min="50" max="1000" step="10" />
+    </div>
+    <div class="row">
+      <button id="openOptions">打开高级设置</button>
+    </div>
+    <div id="status"></div>
+
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
