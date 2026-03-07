@@ -1,23 +1,24 @@
 import { DEFAULT_SETTINGS } from "../shared/constants.js";
 import { loadData, saveData } from "../shared/storage.js";
-import { normalizeKeyCode, toDisplayKey } from "../shared/keymap.js";
+import { toDisplayKey } from "../shared/keymap.js";
 
-const enabledEl = document.querySelector("#enabled");
-const triggerModeEl = document.querySelector("#triggerMode");
-const repeatIntervalEl = document.querySelector("#repeatIntervalMs");
+const markerSizeEl = document.querySelector("#markerSizePx");
+const markerSizeValueEl = document.querySelector("#markerSizeValue");
+const markerBackgroundColorEl = document.querySelector("#markerBackgroundColor");
+const markerBackgroundColorTextEl = document.querySelector("#markerBackgroundColorText");
+const markerTextColorEl = document.querySelector("#markerTextColor");
+const markerTextColorTextEl = document.querySelector("#markerTextColorText");
+const markerOpacityEl = document.querySelector("#markerOpacity");
+const markerOpacityValueEl = document.querySelector("#markerOpacityValue");
+const previewMarkerEl = document.querySelector("#previewMarker");
 const saveSettingsEl = document.querySelector("#saveSettings");
 const originSelectEl = document.querySelector("#originSelect");
-const newOriginEl = document.querySelector("#newOrigin");
+const deleteOriginEl = document.querySelector("#deleteOrigin");
 const markersBodyEl = document.querySelector("#markersBody");
-const addMarkerEl = document.querySelector("#addMarker");
-const saveMarkersEl = document.querySelector("#saveMarkers");
-const exportJsonEl = document.querySelector("#exportJson");
-const importJsonEl = document.querySelector("#importJson");
-const jsonAreaEl = document.querySelector("#jsonArea");
 const statusEl = document.querySelector("#status");
 
 let dataCache = null;
-let editingMarkers = [];
+let markerPulseTimer = 0;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -32,13 +33,90 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, Number(value) || 0));
 }
 
+function clampMarkerSize(value) {
+  return Math.max(15, Math.min(40, Number(value) || DEFAULT_SETTINGS.markerSizePx));
+}
+
+function clampMarkerOpacity(value) {
+  return Math.max(0.3, Math.min(0.9, Number(value) || DEFAULT_SETTINGS.markerOpacity));
+}
+
+function normalizeHexColor(value, fallback) {
+  const source = typeof value === "string" ? value.trim() : "";
+  const hex = source.startsWith("#") ? source.slice(1) : source;
+  if (/^[0-9a-f]{3}$/i.test(hex)) {
+    return (
+      "#" +
+      hex
+        .split("")
+        .map((ch) => ch + ch)
+        .join("")
+        .toUpperCase()
+    );
+  }
+  if (/^[0-9a-f]{6}$/i.test(hex)) {
+    return `#${hex.toUpperCase()}`;
+  }
+  return fallback;
+}
+
+function hexToRgb(hexColor) {
+  const hex = normalizeHexColor(hexColor, "#000000").slice(1);
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(rgb) {
+  return `#${[rgb.r, rgb.g, rgb.b]
+    .map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+}
+
+function mixColor(colorA, colorB, ratio) {
+  const t = Math.max(0, Math.min(1, ratio));
+  return {
+    r: colorA.r + (colorB.r - colorA.r) * t,
+    g: colorA.g + (colorB.g - colorA.g) * t,
+    b: colorA.b + (colorB.b - colorA.b) * t
+  };
+}
+
+function getLuminance(rgb) {
+  return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+}
+
+function getMarkerColorProfile(backgroundHex, opacity) {
+  const background = hexToRgb(backgroundHex);
+  const baseLuminance = getLuminance(background);
+  const borderTarget = baseLuminance >= 0.55 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+  const triggerTarget = baseLuminance >= 0.55 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+  const border = mixColor(background, borderTarget, 0.32);
+  const trigger = mixColor(background, triggerTarget, 0.22);
+  return {
+    markerBackground: `rgba(${Math.round(background.r)}, ${Math.round(background.g)}, ${Math.round(background.b)}, ${opacity.toFixed(3)})`,
+    markerBorder: rgbToHex(border),
+    markerBorderAlpha: 0.92,
+    triggerRgb: `${Math.round(trigger.r)}, ${Math.round(trigger.g)}, ${Math.round(trigger.b)}`
+  };
+}
+
 function ensureOriginOptions() {
   const origins = Object.keys(dataCache.profilesByOrigin);
-  if (!origins.length) {
-    dataCache.profilesByOrigin["https://example.com"] = { markers: [] };
-  }
   originSelectEl.innerHTML = "";
-  Object.keys(dataCache.profilesByOrigin).forEach((origin) => {
+  if (!origins.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无站点数据";
+    originSelectEl.appendChild(option);
+    deleteOriginEl.disabled = true;
+    return;
+  }
+  deleteOriginEl.disabled = false;
+  origins.forEach((origin) => {
     const option = document.createElement("option");
     option.value = origin;
     option.textContent = origin;
@@ -50,192 +128,175 @@ function selectedOrigin() {
   return originSelectEl.value;
 }
 
-function validateNoConflicts(markers) {
-  const seen = new Set();
-  for (const marker of markers) {
-    if (!marker.key) {
-      continue;
-    }
-    if (seen.has(marker.key)) {
-      return marker.key;
-    }
-    seen.add(marker.key);
-  }
-  return "";
-}
-
 function renderMarkersTable() {
   markersBodyEl.innerHTML = "";
-  editingMarkers.forEach((marker) => {
+  const origin = selectedOrigin();
+  const profile = dataCache.profilesByOrigin[origin] || { markers: [] };
+  const markers = Array.isArray(profile.markers) ? profile.markers : [];
+
+  if (!markers.length) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.innerHTML = `<td colspan="4">当前站点暂无标识</td>`;
+    markersBodyEl.appendChild(emptyRow);
+    return;
+  }
+
+  markers.forEach((marker) => {
     const row = document.createElement("tr");
-    row.dataset.id = marker.id;
+    row.dataset.id = String(marker.id || "");
 
     row.innerHTML = `
-      <td><input data-field="key" value="${marker.key || ""}" /></td>
-      <td><input data-field="xRatio" type="number" min="0" max="1" step="0.01" value="${marker.xRatio}" /></td>
-      <td><input data-field="yRatio" type="number" min="0" max="1" step="0.01" value="${marker.yRatio}" /></td>
-      <td><input data-field="radius" type="number" min="8" max="80" step="1" value="${marker.radius}" /></td>
-      <td><input data-field="opacity" type="number" min="0.1" max="1" step="0.05" value="${marker.opacity}" /></td>
-      <td><button data-action="delete">删除</button></td>
+      <td>${toDisplayKey(marker.key || "")}</td>
+      <td>${clamp01(marker.xRatio).toFixed(3)}</td>
+      <td>${clamp01(marker.yRatio).toFixed(3)}</td>
+      <td><button class="btn-danger" data-action="delete">删除</button></td>
     `;
 
-    row.querySelector('[data-action="delete"]').addEventListener("click", () => {
-      editingMarkers = editingMarkers.filter((item) => item.id !== marker.id);
+    row.querySelector('[data-action="delete"]').addEventListener("click", async () => {
+      const nextMarkers = markers.filter((item) => item.id !== marker.id);
+      dataCache.profilesByOrigin[origin] = {
+        ...profile,
+        markers: nextMarkers
+      };
+      await saveData(dataCache);
       renderMarkersTable();
-    });
-
-    row.querySelectorAll("input").forEach((input) => {
-      input.addEventListener("change", () => {
-        const field = input.dataset.field;
-        if (field === "key") {
-          marker.key = normalizeKeyCode(input.value);
-          return;
-        }
-        if (field === "xRatio" || field === "yRatio") {
-          marker[field] = clamp01(input.value);
-          input.value = String(marker[field]);
-          return;
-        }
-        if (field === "radius") {
-          marker.radius = Math.max(8, Math.min(80, Number(input.value) || 24));
-          input.value = String(marker.radius);
-          return;
-        }
-        if (field === "opacity") {
-          marker.opacity = Math.max(0.1, Math.min(1, Number(input.value) || 0.8));
-          input.value = String(marker.opacity);
-        }
-      });
+      setStatus("已删除当前标识");
     });
 
     markersBodyEl.appendChild(row);
   });
 }
 
-function hydrateGlobalSettings() {
-  const settings = { ...DEFAULT_SETTINGS, ...(dataCache.settings || {}) };
-  enabledEl.checked = Boolean(settings.enabled);
-  triggerModeEl.value = settings.triggerMode;
-  repeatIntervalEl.value = String(settings.repeatIntervalMs);
+function pulsePreviewMarker() {
+  if (markerPulseTimer) {
+    window.clearTimeout(markerPulseTimer);
+    markerPulseTimer = 0;
+  }
+  previewMarkerEl.classList.remove("triggered");
+  void previewMarkerEl.offsetWidth;
+  previewMarkerEl.classList.add("triggered");
+  markerPulseTimer = window.setTimeout(() => {
+    previewMarkerEl.classList.remove("triggered");
+    markerPulseTimer = 0;
+  }, 280);
 }
 
-function hydrateOriginMarkers() {
-  const origin = selectedOrigin();
-  const profile = dataCache.profilesByOrigin[origin] || { markers: [] };
-  editingMarkers = (profile.markers || []).map((item) => ({ ...item }));
+function readGlobalSettingsFromInputs() {
+  const markerBackgroundColor = normalizeHexColor(
+    markerBackgroundColorTextEl.value || markerBackgroundColorEl.value,
+    DEFAULT_SETTINGS.markerBackgroundColor
+  );
+  const markerTextColor = normalizeHexColor(
+    markerTextColorTextEl.value || markerTextColorEl.value,
+    DEFAULT_SETTINGS.markerTextColor
+  );
+  return {
+    markerSizePx: clampMarkerSize(markerSizeEl.value),
+    markerBackgroundColor,
+    markerTextColor,
+    markerOpacity: clampMarkerOpacity(Number(markerOpacityEl.value) / 100)
+  };
+}
+
+function renderGlobalPreview() {
+  const settings = readGlobalSettingsFromInputs();
+  const markerSize = settings.markerSizePx;
+  const markerOpacity = settings.markerOpacity;
+  const profile = getMarkerColorProfile(settings.markerBackgroundColor, markerOpacity);
+
+  markerSizeValueEl.textContent = `${markerSize}px`;
+  markerOpacityValueEl.textContent = `${Math.round(markerOpacity * 100)}%`;
+  markerBackgroundColorEl.value = settings.markerBackgroundColor;
+  markerBackgroundColorTextEl.value = settings.markerBackgroundColor;
+  markerTextColorEl.value = settings.markerTextColor;
+  markerTextColorTextEl.value = settings.markerTextColor;
+
+  previewMarkerEl.style.width = `${markerSize}px`;
+  previewMarkerEl.style.height = `${markerSize}px`;
+  previewMarkerEl.style.background = profile.markerBackground;
+  previewMarkerEl.style.borderColor = `rgba(${hexToRgb(profile.markerBorder).r}, ${hexToRgb(profile.markerBorder).g}, ${hexToRgb(profile.markerBorder).b}, ${profile.markerBorderAlpha})`;
+  previewMarkerEl.style.color = settings.markerTextColor;
+  previewMarkerEl.style.setProperty("--preview-trigger-rgb", profile.triggerRgb);
+}
+
+function hydrateGlobalSettings() {
+  const settings = { ...DEFAULT_SETTINGS, ...(dataCache.settings || {}) };
+  markerSizeEl.value = String(clampMarkerSize(settings.markerSizePx));
+  markerOpacityEl.value = String(Math.round(clampMarkerOpacity(settings.markerOpacity) * 100));
+  markerBackgroundColorEl.value = normalizeHexColor(
+    settings.markerBackgroundColor,
+    DEFAULT_SETTINGS.markerBackgroundColor
+  );
+  markerBackgroundColorTextEl.value = markerBackgroundColorEl.value;
+  markerTextColorEl.value = normalizeHexColor(settings.markerTextColor, DEFAULT_SETTINGS.markerTextColor);
+  markerTextColorTextEl.value = markerTextColorEl.value;
+  renderGlobalPreview();
+  pulsePreviewMarker();
+}
+
+function hydrateSiteManagement() {
   renderMarkersTable();
 }
 
 async function saveGlobalSettings() {
+  const nextSettings = readGlobalSettingsFromInputs();
   dataCache.settings = {
-    enabled: enabledEl.checked,
-    triggerMode: triggerModeEl.value === "repeat" ? "repeat" : "single",
-    repeatIntervalMs: Math.max(50, Math.min(1000, Number(repeatIntervalEl.value) || 120))
+    ...DEFAULT_SETTINGS,
+    ...(dataCache.settings || {}),
+    ...nextSettings
   };
   await saveData(dataCache);
+  renderGlobalPreview();
+  pulsePreviewMarker();
   setStatus("全局设置已保存");
 }
 
-async function saveCurrentOriginMarkers() {
-  const conflictKey = validateNoConflicts(editingMarkers);
-  if (conflictKey) {
-    setStatus(`键位冲突: ${toDisplayKey(conflictKey)}`);
-    return;
-  }
+async function deleteCurrentOrigin() {
   const origin = selectedOrigin();
-  dataCache.profilesByOrigin[origin] = {
-    markers: editingMarkers.map((item) => ({
-      ...item,
-      key: normalizeKeyCode(item.key)
-    }))
-  };
+  if (!origin || !dataCache.profilesByOrigin[origin]) {
+    setStatus("当前无可删除站点");
+    return;
+  }
+  const ok = window.confirm(`确认删除站点 ${origin} 及其全部标识吗？`);
+  if (!ok) {
+    return;
+  }
+  delete dataCache.profilesByOrigin[origin];
   await saveData(dataCache);
-  setStatus("站点标识已保存");
-}
-
-function addMarker() {
-  editingMarkers.push({
-    id: String(Date.now()) + Math.random().toString(16).slice(2, 8),
-    key: "",
-    xRatio: 0.5,
-    yRatio: 0.5,
-    radius: 24,
-    opacity: 0.8
-  });
-  renderMarkersTable();
-}
-
-function addOrigin() {
-  const value = window.prompt("输入新的 Origin，例如 https://example.com");
-  if (!value) {
-    return;
-  }
-  try {
-    const url = new URL(value);
-    const origin = url.origin;
-    if (!dataCache.profilesByOrigin[origin]) {
-      dataCache.profilesByOrigin[origin] = { markers: [] };
-    }
-    ensureOriginOptions();
-    originSelectEl.value = origin;
-    hydrateOriginMarkers();
-    setStatus("已新增站点");
-  } catch (_error) {
-    setStatus("Origin 格式无效");
-  }
-}
-
-function exportJson() {
-  jsonAreaEl.value = JSON.stringify(dataCache, null, 2);
-  setStatus("已导出到文本框");
-}
-
-async function importJson() {
-  const text = jsonAreaEl.value.trim();
-  if (!text) {
-    setStatus("请先粘贴 JSON");
-    return;
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      throw new Error("invalid");
-    }
-    dataCache = {
-      version: 1,
-      settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
-      profilesByOrigin: parsed.profilesByOrigin || {}
-    };
-    await saveData(dataCache);
-    ensureOriginOptions();
-    hydrateGlobalSettings();
-    hydrateOriginMarkers();
-    setStatus("导入成功");
-  } catch (_error) {
-    setStatus("导入失败，JSON 格式错误");
-  }
+  ensureOriginOptions();
+  hydrateSiteManagement();
+  setStatus("站点已删除");
 }
 
 async function bootstrap() {
   dataCache = await loadData();
   hydrateGlobalSettings();
   ensureOriginOptions();
-  hydrateOriginMarkers();
+  hydrateSiteManagement();
+
+  markerSizeEl.addEventListener("input", renderGlobalPreview);
+  markerOpacityEl.addEventListener("input", renderGlobalPreview);
+  markerBackgroundColorEl.addEventListener("input", () => {
+    markerBackgroundColorTextEl.value = markerBackgroundColorEl.value;
+    renderGlobalPreview();
+  });
+  markerTextColorEl.addEventListener("input", () => {
+    markerTextColorTextEl.value = markerTextColorEl.value;
+    renderGlobalPreview();
+  });
+  markerBackgroundColorTextEl.addEventListener("input", renderGlobalPreview);
+  markerTextColorTextEl.addEventListener("input", renderGlobalPreview);
+  markerBackgroundColorTextEl.addEventListener("blur", renderGlobalPreview);
+  markerTextColorTextEl.addEventListener("blur", renderGlobalPreview);
 
   saveSettingsEl.addEventListener("click", () => {
     void saveGlobalSettings();
   });
   originSelectEl.addEventListener("change", () => {
-    hydrateOriginMarkers();
+    hydrateSiteManagement();
   });
-  newOriginEl.addEventListener("click", addOrigin);
-  addMarkerEl.addEventListener("click", addMarker);
-  saveMarkersEl.addEventListener("click", () => {
-    void saveCurrentOriginMarkers();
-  });
-  exportJsonEl.addEventListener("click", exportJson);
-  importJsonEl.addEventListener("click", () => {
-    void importJson();
+  deleteOriginEl.addEventListener("click", () => {
+    void deleteCurrentOrigin();
   });
 }
 

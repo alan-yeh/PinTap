@@ -2,11 +2,13 @@ export const STORAGE_KEY = "pintapData";
 export const DATA_VERSION = 1;
 
 export const DEFAULT_SETTINGS = {
-  enabled: true,
-  triggerMode: "single",
-  repeatIntervalMs: 120,
-  persistentPopupEnabled: false,
-  extensionEnabled: true
+  markerSizePx: 28,
+  markerBackgroundColor: "#3B82F6",
+  markerTextColor: "#FFFFFF",
+  markerOpacity: 0.8,
+  markersEnabled: true,
+  extensionEnabled: true,
+  persistentPopupEnabled: false
 };
 
 export const MESSAGE_TYPES = {

@@ -1,9 +1,6 @@
 import { DEFAULT_SETTINGS } from "../shared/constants.js";
 import { loadData, saveData } from "../shared/storage.js";
 
-const enabledEl = document.querySelector("#enabled");
-const triggerModeEl = document.querySelector("#triggerMode");
-const repeatIntervalEl = document.querySelector("#repeatIntervalMs");
 const persistentPopupEl = document.querySelector("#persistentPopup");
 const toggleEditEl = document.querySelector("#toggleEdit");
 const toggleAddEl = document.querySelector("#toggleAdd");
@@ -35,18 +32,13 @@ function setStatus(text) {
 async function hydrate() {
   const data = await loadData();
   const settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-  enabledEl.checked = Boolean(settings.enabled);
-  triggerModeEl.value = settings.triggerMode;
-  repeatIntervalEl.value = String(settings.repeatIntervalMs);
   persistentPopupEl.checked = Boolean(settings.persistentPopupEnabled);
 }
 
 async function saveSettings() {
   const data = await loadData();
   data.settings = {
-    enabled: enabledEl.checked,
-    triggerMode: triggerModeEl.value === "repeat" ? "repeat" : "single",
-    repeatIntervalMs: Math.max(50, Math.min(1000, Number(repeatIntervalEl.value) || 120)),
+    ...(data.settings || {}),
     persistentPopupEnabled: persistentPopupEl.checked
   };
   await saveData(data);
@@ -91,18 +83,6 @@ async function sendUiMessage(type) {
     return null;
   }
 }
-
-enabledEl.addEventListener("change", () => {
-  void saveSettings();
-});
-
-triggerModeEl.addEventListener("change", () => {
-  void saveSettings();
-});
-
-repeatIntervalEl.addEventListener("change", () => {
-  void saveSettings();
-});
 
 persistentPopupEl.addEventListener("change", () => {
   void (async () => {

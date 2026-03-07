@@ -1,19 +1,21 @@
 (function initPinTap() {
   const STORAGE_KEY = "pintapData";
   const DEFAULT_SETTINGS = {
-    enabled: true,
-    triggerMode: "single",
-    repeatIntervalMs: 120,
+    markerSizePx: 28,
+    markerBackgroundColor: "#3B82F6",
+    markerTextColor: "#FFFFFF",
+    markerOpacity: 0.8,
+    markersEnabled: true,
     extensionEnabled: true,
     toolbarPosX: 24,
     toolbarPosY: 24
   };
   const MESSAGE_TYPES = {
     GET_ACTIVE_STATUS: "PINTAP_GET_ACTIVE_STATUS",
-    ACTIVE_STATUS: "PINTAP_ACTIVE_STATUS"
+    ACTIVE_STATUS: "PINTAP_ACTIVE_STATUS",
+    EXTENSION_STATUS: "PINTAP_EXTENSION_STATUS"
   };
   const FRAME_KEYDOWN_MESSAGE = "PINTAP_FRAME_KEYDOWN";
-  const FRAME_KEYUP_MESSAGE = "PINTAP_FRAME_KEYUP";
   const FRAME_CLICK_MESSAGE = "PINTAP_FRAME_CLICK";
   const UI_GET_STATE_MESSAGE = "PINTAP_UI_GET_STATE";
   const UI_TOGGLE_EDIT_MESSAGE = "PINTAP_UI_TOGGLE_EDIT";
@@ -49,7 +51,6 @@
   let toolbarDragOffsetY = 0;
   let toolbarDarkMode = false;
   let themeRefreshTimer = 0;
-  const repeatTimers = new Map();
   const handledKeyEvents = new WeakSet();
 
   const root = document.createElement("div");
@@ -281,19 +282,77 @@
     });
   }
 
-  function stopRepeatForKey(code) {
-    const timer = repeatTimers.get(code);
-    if (timer) {
-      clearInterval(timer);
-      repeatTimers.delete(code);
-    }
+  function clampMarkerSize(value) {
+    return Math.max(15, Math.min(40, Number(value) || DEFAULT_SETTINGS.markerSizePx));
   }
 
-  function stopAllRepeats() {
-    for (const [code, timer] of repeatTimers.entries()) {
-      clearInterval(timer);
-      repeatTimers.delete(code);
+  function clampMarkerOpacity(value) {
+    return Math.max(0.3, Math.min(0.9, Number(value) || DEFAULT_SETTINGS.markerOpacity));
+  }
+
+  function normalizeHexColor(value, fallback) {
+    const source = typeof value === "string" ? value.trim() : "";
+    const hex = source.startsWith("#") ? source.slice(1) : source;
+    if (/^[0-9a-f]{3}$/i.test(hex)) {
+      return (
+        "#" +
+        hex
+          .split("")
+          .map((ch) => ch + ch)
+          .join("")
+          .toUpperCase()
+      );
     }
+    if (/^[0-9a-f]{6}$/i.test(hex)) {
+      return `#${hex.toUpperCase()}`;
+    }
+    return fallback;
+  }
+
+  function hexToRgb(hexColor) {
+    const hex = normalizeHexColor(hexColor, "#000000").slice(1);
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16)
+    };
+  }
+
+  function rgbToHex(rgb) {
+    return `#${[rgb.r, rgb.g, rgb.b]
+      .map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase()}`;
+  }
+
+  function mixColor(colorA, colorB, ratio) {
+    const t = Math.max(0, Math.min(1, ratio));
+    return {
+      r: colorA.r + (colorB.r - colorA.r) * t,
+      g: colorA.g + (colorB.g - colorA.g) * t,
+      b: colorA.b + (colorB.b - colorA.b) * t
+    };
+  }
+
+  function getLuminance(rgb) {
+    return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+  }
+
+  function getMarkerColorProfile(backgroundHex, opacity) {
+    const background = hexToRgb(backgroundHex);
+    const baseLuminance = getLuminance(background);
+    const borderTarget = baseLuminance >= 0.55 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+    const triggerTarget = baseLuminance >= 0.55 ? { r: 0, g: 0, b: 0 } : { r: 255, g: 255, b: 255 };
+    const border = mixColor(background, borderTarget, 0.32);
+    const trigger = mixColor(background, triggerTarget, 0.22);
+    return {
+      markerBackground: `rgba(${Math.round(background.r)}, ${Math.round(background.g)}, ${Math.round(background.b)}, ${clampMarkerOpacity(
+        opacity
+      ).toFixed(3)})`,
+      markerBorder: rgbToHex(border),
+      markerBorderAlpha: 0.92,
+      triggerRgb: `${Math.round(trigger.r)}, ${Math.round(trigger.g)}, ${Math.round(trigger.b)}`
+    };
   }
 
   function dispatchSyntheticClickAtPoint(clientX, clientY, debugMeta = null) {
@@ -614,32 +673,59 @@
     await persistSettings();
   }
 
+  async function setMarkersEnabled(enabled, showStatusToast = true) {
+    settings.markersEnabled = Boolean(enabled);
+    if (!settings.markersEnabled) {
+      addingMode = false;
+      calibrationMode = false;
+      editMode = false;
+      selectedMarkerId = null;
+      hideClickProbe();
+    }
+    await persistSettings();
+    render();
+    if (showStatusToast) {
+      showToast(settings.markersEnabled ? "标识监听已启用" : "标识监听已禁用");
+    }
+  }
+
   function syncToolbarUi() {
     if (!isTopWindow) {
       return;
     }
     toolbar.style.display = settings.extensionEnabled ? "" : "none";
-    const pauseButton = toolbarControls.querySelector('[data-action="toggle-enabled"]');
-    if (pauseButton instanceof HTMLButtonElement) {
-      const enabled = Boolean(settings.enabled);
-      setToolbarButtonIcon(pauseButton, enabled ? "pause" : "play", enabled ? "II" : ">");
-      pauseButton.title = enabled ? "暂停 PinTap" : "启用 PinTap";
-    }
+    toolbar.classList.toggle("paused", !settings.extensionEnabled);
+    const toggleButton = toolbarControls.querySelector('[data-action="toggle-enabled"]');
     const editButton = toolbarControls.querySelector('[data-action="edit"]');
     const addButton = toolbarControls.querySelector('[data-action="add"]');
     const removeButton = toolbarControls.querySelector('[data-action="remove"]');
     const clearButton = toolbarControls.querySelector('[data-action="clear"]');
     const saveButton = toolbarControls.querySelector('[data-action="save"]');
+    const settingsButton = toolbarControls.querySelector('[data-action="settings"]');
+
+    if (toggleButton instanceof HTMLButtonElement) {
+      toggleButton.title = settings.markersEnabled ? "禁用标识监听" : "启用标识监听";
+      toggleButton.dataset.fallbackText = settings.markersEnabled ? "关" : "开";
+      toggleButton.dataset.iconName = settings.markersEnabled ? "pause" : "play-circle";
+      const fallback = toggleButton.querySelector("span");
+      if (fallback instanceof HTMLElement) {
+        fallback.textContent = toggleButton.dataset.fallbackText;
+      }
+      setToolbarButtonIcon(toggleButton, toggleButton.dataset.iconName, toggleButton.dataset.fallbackText);
+    }
+
     if (editButton instanceof HTMLElement) {
-      editButton.style.display = editMode ? "none" : "inline-flex";
+      editButton.style.display = settings.markersEnabled && !editMode ? "inline-flex" : "none";
     }
     [addButton, removeButton, clearButton, saveButton].forEach((item) => {
       if (item instanceof HTMLElement) {
-        item.style.display = editMode ? "inline-flex" : "none";
+        item.style.display = settings.markersEnabled && editMode ? "inline-flex" : "none";
       }
     });
+    if (settingsButton instanceof HTMLElement) {
+      settingsButton.style.display = "inline-flex";
+    }
     refreshToolbarThemeMode();
-    toolbar.classList.toggle("paused", !settings.enabled);
     setToolbarPosition(toolbarPosX, toolbarPosY);
   }
 
@@ -653,22 +739,11 @@
 
     const toggleEnabledBtn = createToolbarButton({
       action: "toggle-enabled",
-      title: "暂停 PinTap",
+      title: "禁用标识监听",
       iconName: "pause",
-      fallbackText: "II",
+      fallbackText: "关",
       onClick: async () => {
-        settings.enabled = !settings.enabled;
-        if (!settings.enabled) {
-          addingMode = false;
-          calibrationMode = false;
-          editMode = false;
-          selectedMarkerId = null;
-          hideClickProbe();
-          stopAllRepeats();
-        }
-        await persistSettings();
-        syncToolbarUi();
-        render();
+        await setMarkersEnabled(!settings.markersEnabled);
       }
     });
 
@@ -678,10 +753,6 @@
       iconName: "edit-square",
       fallbackText: "E",
       onClick: async () => {
-        if (!settings.enabled) {
-          showToast("请先启用 PinTap");
-          return;
-        }
         editMode = true;
         addingMode = false;
         calibrationMode = false;
@@ -695,10 +766,6 @@
       iconName: "plus-circle",
       fallbackText: "+",
       onClick: async () => {
-        if (!settings.enabled) {
-          showToast("请先启用 PinTap");
-          return;
-        }
         if (!editMode) {
           editMode = true;
         }
@@ -847,6 +914,8 @@
 
   function getUiState() {
     return {
+      extensionEnabled: Boolean(settings.extensionEnabled),
+      markersEnabled: Boolean(settings.markersEnabled),
       editMode,
       addingMode,
       calibrationMode,
@@ -857,6 +926,10 @@
   }
 
   function toggleEditMode() {
+    if (!settings.markersEnabled) {
+      showToast("标识监听当前已禁用");
+      return getUiState();
+    }
     editMode = !editMode;
     addingMode = false;
     if (!editMode) {
@@ -870,6 +943,10 @@
   }
 
   function toggleAddMode() {
+    if (!settings.markersEnabled) {
+      showToast("标识监听当前已禁用");
+      return getUiState();
+    }
     if (!editMode) {
       editMode = true;
     }
@@ -881,6 +958,10 @@
   }
 
   async function clearAllMarkers() {
+    if (!settings.markersEnabled) {
+      showToast("标识监听当前已禁用");
+      return getUiState();
+    }
     markers = [];
     selectedMarkerId = null;
     await persistMarkers();
@@ -891,6 +972,10 @@
   }
 
   function toggleCalibrationMode() {
+    if (!settings.markersEnabled) {
+      showToast("标识监听当前已禁用");
+      return getUiState();
+    }
     if (!editMode) {
       editMode = true;
     }
@@ -911,39 +996,44 @@
       markerLayer.innerHTML = "";
       return;
     }
-    if (!settings.extensionEnabled) {
-      markerLayer.innerHTML = "";
-      return;
-    }
-    if (!settings.enabled) {
+    if (!settings.extensionEnabled || !settings.markersEnabled) {
       markerLayer.innerHTML = "";
       return;
     }
     markerLayer.innerHTML = "";
+    const markerSizePx = clampMarkerSize(settings.markerSizePx);
+    const markerBackgroundColor = normalizeHexColor(
+      settings.markerBackgroundColor,
+      DEFAULT_SETTINGS.markerBackgroundColor
+    );
+    const markerTextColor = normalizeHexColor(settings.markerTextColor, DEFAULT_SETTINGS.markerTextColor);
+    const markerOpacity = clampMarkerOpacity(settings.markerOpacity);
+    const styleProfile = getMarkerColorProfile(markerBackgroundColor, markerOpacity);
+    const borderRgb = hexToRgb(styleProfile.markerBorder);
     markers.forEach((marker) => {
       const el = document.createElement("div");
       el.className = "pintap-marker";
       if (editMode) {
         el.classList.add("editable");
       }
-      if (!settings.enabled || !isActiveTab) {
+      if (!isActiveTab) {
         el.classList.add("inactive");
       }
       el.dataset.markerId = marker.id;
       el.textContent = formatKey(marker.key);
       el.style.left = `${clampRatio(marker.xRatio) * 100}%`;
       el.style.top = `${clampRatio(marker.yRatio) * 100}%`;
-      el.style.width = `${marker.radius * 2}px`;
-      el.style.height = `${marker.radius * 2}px`;
-      el.style.opacity = String(marker.opacity ?? 0.8);
+      el.style.width = `${markerSizePx}px`;
+      el.style.height = `${markerSizePx}px`;
+      el.style.background = styleProfile.markerBackground;
+      el.style.borderColor = `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${styleProfile.markerBorderAlpha})`;
+      el.style.color = markerTextColor;
+      el.style.setProperty("--pintap-trigger-rgb", styleProfile.triggerRgb);
       if (editMode && selectedMarkerId === marker.id) {
         el.classList.add("selected");
       }
 
       el.addEventListener("click", (event) => {
-        if (!settings.enabled) {
-          return;
-        }
         event.stopPropagation();
         selectedMarkerId = marker.id;
         renderMarkers();
@@ -1005,7 +1095,7 @@
   }
 
   function render() {
-    if (!settings.extensionEnabled) {
+    if (!settings.extensionEnabled || !settings.markersEnabled) {
       markerLayer.innerHTML = "";
       hideClickProbe();
       syncToolbarUi();
@@ -1026,9 +1116,7 @@
       id: String(Date.now()) + Math.random().toString(16).slice(2, 8),
       key: "",
       xRatio,
-      yRatio,
-      radius: 24,
-      opacity: 0.8
+      yRatio
     };
     markers.push(marker);
     selectedMarkerId = marker.id;
@@ -1099,10 +1187,7 @@
     });
 
     function keyboardEnabledForCurrentPage() {
-      if (!settings.extensionEnabled) {
-        return false;
-      }
-      if (!settings.enabled) {
+      if (!settings.extensionEnabled || !settings.markersEnabled) {
         return false;
       }
       // In iframes, key events are already scoped by browser focus rules.
@@ -1190,40 +1275,10 @@
         return;
       }
 
-      const repeatKey = candidates[0];
-      if (!repeatKey) {
+      if (isRepeatedPress) {
         return;
       }
-
-      if (settings.triggerMode === "single") {
-        if (isRepeatedPress) {
-          return;
-        }
-        triggerByCandidates(candidates);
-        return;
-      }
-
-      if (settings.triggerMode === "repeat") {
-        if (repeatTimers.has(repeatKey)) {
-          return;
-        }
-        triggerByCandidates(candidates);
-        const interval = Math.max(50, Number(settings.repeatIntervalMs) || 120);
-        const timer = window.setInterval(() => {
-          triggerByCandidates(candidates);
-        }, interval);
-        repeatTimers.set(repeatKey, timer);
-      }
-    }
-
-    function processKeyupCandidates(candidates) {
-      if (settings.triggerMode !== "repeat") {
-        return;
-      }
-      if (!candidates.length) {
-        return;
-      }
-      candidates.forEach((candidate) => stopRepeatForKey(candidate));
+      triggerByCandidates(candidates);
     }
 
     function relayToTopWindow(type, candidates, isRepeatedPress) {
@@ -1267,15 +1322,9 @@
       if (!data || data.__pintap !== true || !Array.isArray(data.candidates)) {
         return;
       }
-      if (!settings.enabled) {
-        return;
-      }
       if (data.type === FRAME_KEYDOWN_MESSAGE) {
         processKeydownCandidates(data.candidates, Boolean(data.isRepeatedPress), false);
         return;
-      }
-      if (data.type === FRAME_KEYUP_MESSAGE) {
-        processKeyupCandidates(data.candidates);
       }
     }
 
@@ -1304,38 +1353,12 @@
       processKeydownCandidates(candidates, event.repeat, event.shiftKey);
     }
 
-    function onKeyup(event) {
-      if (handledKeyEvents.has(event)) {
-        return;
-      }
-      handledKeyEvents.add(event);
-
-      const candidates = collectEventKeyCandidates(event);
-      if (!candidates.length) {
-        return;
-      }
-      if (!isTopWindow) {
-        relayToTopWindow(FRAME_KEYUP_MESSAGE, candidates, false);
-        return;
-      }
-      processKeyupCandidates(candidates);
-    }
-
     window.addEventListener("keydown", onKeydown, true);
     document.addEventListener("keydown", onKeydown, true);
     if (document.documentElement) {
       document.documentElement.addEventListener("keydown", onKeydown, true);
     }
-    window.addEventListener("keyup", onKeyup, true);
-    document.addEventListener("keyup", onKeyup, true);
-    if (document.documentElement) {
-      document.documentElement.addEventListener("keyup", onKeyup, true);
-    }
     window.addEventListener("message", onWindowMessage, true);
-
-    window.addEventListener("blur", () => {
-      stopAllRepeats();
-    });
   }
 
   function mountRoot() {
@@ -1401,9 +1424,6 @@
       chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (message?.type === MESSAGE_TYPES.ACTIVE_STATUS) {
           isActiveTab = Boolean(message.isActive);
-          if (!isActiveTab) {
-            stopAllRepeats();
-          }
           renderMarkers();
           return false;
         }
@@ -1415,7 +1435,7 @@
             calibrationMode = false;
             editMode = false;
             selectedMarkerId = null;
-            stopAllRepeats();
+            hideClickProbe();
           }
           render();
           return false;

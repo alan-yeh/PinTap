@@ -23,6 +23,11 @@
         padding: 14px;
         margin-bottom: 14px;
       }
+      .split {
+        display: grid;
+        grid-template-columns: minmax(340px, 1fr) 260px;
+        gap: 18px;
+      }
       .row {
         display: flex;
         align-items: center;
@@ -30,17 +35,24 @@
         margin-bottom: 10px;
       }
       label {
-        min-width: 120px;
+        min-width: 140px;
       }
       input,
       select,
-      button,
-      textarea {
+      button {
         border-radius: 8px;
         border: 1px solid #334155;
         background: #0f172a;
         color: #e2e8f0;
         padding: 6px 8px;
+      }
+      .btn-danger {
+        border-color: #7f1d1d;
+        color: #fecaca;
+        background: #3f0f13;
+      }
+      .btn-danger:hover {
+        background: #5b151b;
       }
       table {
         width: 100%;
@@ -53,14 +65,67 @@
         padding: 8px 6px;
         vertical-align: middle;
       }
-      textarea {
-        width: 100%;
-        min-height: 180px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
       .status {
         color: #93c5fd;
         min-height: 20px;
+      }
+      .value {
+        width: 68px;
+        color: #cbd5e1;
+        text-align: right;
+      }
+      .color-field {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .color-picker {
+        width: 38px;
+        height: 32px;
+        padding: 2px;
+      }
+      .color-input {
+        width: 120px;
+        text-transform: uppercase;
+      }
+      .preview-panel {
+        border: 1px dashed #334155;
+        border-radius: 12px;
+        min-height: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at 20% 20%, #1f2937, #0f172a);
+      }
+      .preview-marker {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: 2px solid rgba(96, 165, 250, 0.85);
+        background: rgba(59, 130, 246, 0.35);
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .preview-marker.triggered {
+        animation: preview-flash 260ms ease;
+      }
+      @keyframes preview-flash {
+        0% {
+          box-shadow: 0 0 0 0 rgba(var(--preview-trigger-rgb, 56, 189, 248), 0.75);
+          transform: scale(1);
+        }
+        50% {
+          box-shadow: 0 0 0 12px rgba(var(--preview-trigger-rgb, 56, 189, 248), 0.14);
+          transform: scale(1.14);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(var(--preview-trigger-rgb, 56, 189, 248), 0);
+          transform: scale(1);
+        }
       }
     </style>
   </head>
@@ -68,59 +133,63 @@
     <h1>PinTap 高级设置</h1>
     <section>
       <h2>全局设置</h2>
-      <div class="row">
-        <label for="enabled">启用插件</label>
-        <input id="enabled" type="checkbox" />
-      </div>
-      <div class="row">
-        <label for="triggerMode">触发模式</label>
-        <select id="triggerMode">
-          <option value="single">按下一次</option>
-          <option value="repeat">按住连发</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="repeatIntervalMs">连发间隔(ms)</label>
-        <input id="repeatIntervalMs" type="number" min="50" max="1000" step="10" />
-      </div>
-      <div class="row">
-        <button id="saveSettings">保存全局设置</button>
+      <div class="split">
+        <div>
+          <div class="row">
+            <label for="markerSizePx">标识大小</label>
+            <input id="markerSizePx" type="range" min="15" max="40" step="1" />
+            <span class="value" id="markerSizeValue">28px</span>
+          </div>
+          <div class="row">
+            <label for="markerBackgroundColor">标识背景颜色</label>
+            <div class="color-field">
+              <input class="color-picker" id="markerBackgroundColor" type="color" />
+              <input class="color-input" id="markerBackgroundColorText" type="text" placeholder="#3B82F6" />
+            </div>
+          </div>
+          <div class="row">
+            <label for="markerTextColor">标识文字颜色</label>
+            <div class="color-field">
+              <input class="color-picker" id="markerTextColor" type="color" />
+              <input class="color-input" id="markerTextColorText" type="text" placeholder="#FFFFFF" />
+            </div>
+          </div>
+          <div class="row">
+            <label for="markerOpacity">透明度</label>
+            <input id="markerOpacity" type="range" min="30" max="90" step="1" />
+            <span class="value" id="markerOpacityValue">80%</span>
+          </div>
+          <div class="row">
+            <button id="saveSettings">保存全局设置</button>
+          </div>
+        </div>
+        <div>
+          <div>实时预览</div>
+          <div class="preview-panel">
+            <div class="preview-marker" id="previewMarker">K</div>
+          </div>
+        </div>
       </div>
     </section>
 
     <section>
-      <h2>标识管理</h2>
+      <h2>站点管理</h2>
       <div class="row">
         <label for="originSelect">站点 Origin</label>
         <select id="originSelect"></select>
-        <button id="newOrigin">新增空站点</button>
+        <button id="deleteOrigin" class="btn-danger">删除</button>
       </div>
       <table>
         <thead>
           <tr>
             <th>键位</th>
-            <th>X 比例</th>
-            <th>Y 比例</th>
-            <th>半径</th>
-            <th>透明度</th>
+            <th>X 轴</th>
+            <th>Y 轴</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody id="markersBody"></tbody>
       </table>
-      <div class="row">
-        <button id="addMarker">新增标识</button>
-        <button id="saveMarkers">保存当前站点标识</button>
-      </div>
-    </section>
-
-    <section>
-      <h2>导入 / 导出</h2>
-      <div class="row">
-        <button id="exportJson">导出 JSON</button>
-        <button id="importJson">导入 JSON</button>
-      </div>
-      <textarea id="jsonArea" placeholder="导出的 JSON 会显示在这里，也可粘贴后导入"></textarea>
     </section>
 
     <div class="status" id="status"></div>
