@@ -5,10 +5,12 @@ export const DEFAULT_SETTINGS = {
   enabled: true,
   triggerMode: "single",
   repeatIntervalMs: 120,
-  persistentPopupEnabled: false
+  persistentPopupEnabled: false,
+  extensionEnabled: true
 };
 
 export const MESSAGE_TYPES = {
   GET_ACTIVE_STATUS: "PINTAP_GET_ACTIVE_STATUS",
-  ACTIVE_STATUS: "PINTAP_ACTIVE_STATUS"
+  ACTIVE_STATUS: "PINTAP_ACTIVE_STATUS",
+  EXTENSION_STATUS: "PINTAP_EXTENSION_STATUS"
 };

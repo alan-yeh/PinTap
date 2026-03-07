@@ -8,6 +8,108 @@ const OPEN_PERSISTENT_POPUP_MESSAGE = "PINTAP_OPEN_PERSISTENT_POPUP";
 const CLOSE_PERSISTENT_POPUP_MESSAGE = "PINTAP_CLOSE_PERSISTENT_POPUP";
 const GET_ACTIVE_TAB_ID_MESSAGE = "PINTAP_GET_ACTIVE_TAB_ID";
 const OPEN_OPTIONS_PAGE_MESSAGE = "PINTAP_OPEN_OPTIONS_PAGE";
+let iconCache = null;
+
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function createIconImageData(size, backgroundColor, textColor) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.clearRect(0, 0, size, size);
+  drawRoundedRect(ctx, 0, 0, size, size, Math.round(size * 0.22));
+  ctx.fillStyle = backgroundColor;
+  ctx.fill();
+
+  ctx.fillStyle = textColor;
+  ctx.font = `700 ${Math.round(size * 0.5)}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("P", size / 2, size / 2 + Math.round(size * 0.02));
+
+  return ctx.getImageData(0, 0, size, size);
+}
+
+function getActionIconPayload(enabled) {
+  if (!iconCache) {
+    iconCache = {
+      enabled: {
+        16: createIconImageData(16, "#1A3263", "#E8E2DB"),
+        32: createIconImageData(32, "#1A3263", "#E8E2DB"),
+        48: createIconImageData(48, "#1A3263", "#E8E2DB"),
+        128: createIconImageData(128, "#1A3263", "#E8E2DB")
+      },
+      disabled: {
+        16: createIconImageData(16, "#797979", "#D7D7D7"),
+        32: createIconImageData(32, "#797979", "#D7D7D7"),
+        48: createIconImageData(48, "#797979", "#D7D7D7"),
+        128: createIconImageData(128, "#797979", "#D7D7D7")
+      }
+    };
+  }
+  return enabled ? iconCache.enabled : iconCache.disabled;
+}
+
+async function setActionAppearance(enabled) {
+  await chrome.action.setIcon({
+    imageData: getActionIconPayload(enabled)
+  });
+  await chrome.action.setTitle({
+    title: enabled ? "PinTap（已启用）" : "PinTap（已禁用）"
+  });
+}
+
+async function getExtensionEnabledState() {
+  const data = await loadData();
+  return Boolean(data.settings?.extensionEnabled ?? true);
+}
+
+async function broadcastExtensionStatus(enabled) {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(
+    tabs.map(async (tab) => {
+      if (typeof tab.id !== "number") {
+        return;
+      }
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: MESSAGE_TYPES.EXTENSION_STATUS,
+          extensionEnabled: enabled
+        });
+      } catch (_error) {
+        // Ignore tabs without active content script.
+      }
+    })
+  );
+}
+
+async function setExtensionEnabledState(enabled) {
+  const data = await loadData();
+  data.settings = {
+    ...getDefaultData().settings,
+    ...(data.settings || {}),
+    extensionEnabled: enabled
+  };
+  await saveData(data);
+  await setActionAppearance(enabled);
+  await broadcastExtensionStatus(enabled);
+}
 
 async function getPersistentPopupState() {
   if (typeof persistentPopupWindowId !== "number") {
@@ -65,6 +167,8 @@ async function ensureStorageInitialized() {
       ...data.settings
     }
   });
+  const enabled = Boolean(data.settings?.extensionEnabled ?? true);
+  await setActionAppearance(enabled);
 }
 
 async function sendActiveStatus(tabId, isActive) {
@@ -132,6 +236,12 @@ chrome.runtime.onStartup.addListener(() => {
     }
   });
   void syncActiveTabFromLastFocusedWindow();
+});
+
+chrome.action.onClicked.addListener(() => {
+  void getExtensionEnabledState().then(async (enabled) => {
+    await setExtensionEnabledState(!enabled);
+  });
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {

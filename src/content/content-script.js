@@ -4,6 +4,7 @@
     enabled: true,
     triggerMode: "single",
     repeatIntervalMs: 120,
+    extensionEnabled: true,
     toolbarPosX: 24,
     toolbarPosY: 24
   };
@@ -617,6 +618,7 @@
     if (!isTopWindow) {
       return;
     }
+    toolbar.style.display = settings.extensionEnabled ? "" : "none";
     const pauseButton = toolbarControls.querySelector('[data-action="toggle-enabled"]');
     if (pauseButton instanceof HTMLButtonElement) {
       const enabled = Boolean(settings.enabled);
@@ -909,6 +911,10 @@
       markerLayer.innerHTML = "";
       return;
     }
+    if (!settings.extensionEnabled) {
+      markerLayer.innerHTML = "";
+      return;
+    }
     if (!settings.enabled) {
       markerLayer.innerHTML = "";
       return;
@@ -999,6 +1005,12 @@
   }
 
   function render() {
+    if (!settings.extensionEnabled) {
+      markerLayer.innerHTML = "";
+      hideClickProbe();
+      syncToolbarUi();
+      return;
+    }
     renderMarkers();
     if (!editMode) {
       hideClickProbe();
@@ -1087,6 +1099,9 @@
     });
 
     function keyboardEnabledForCurrentPage() {
+      if (!settings.extensionEnabled) {
+        return false;
+      }
       if (!settings.enabled) {
         return false;
       }
@@ -1390,6 +1405,19 @@
             stopAllRepeats();
           }
           renderMarkers();
+          return false;
+        }
+
+        if (message?.type === MESSAGE_TYPES.EXTENSION_STATUS) {
+          settings.extensionEnabled = Boolean(message.extensionEnabled);
+          if (!settings.extensionEnabled) {
+            addingMode = false;
+            calibrationMode = false;
+            editMode = false;
+            selectedMarkerId = null;
+            stopAllRepeats();
+          }
+          render();
           return false;
         }
 
