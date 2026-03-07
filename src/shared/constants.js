@@ -4,7 +4,8 @@ export const DATA_VERSION = 1;
 export const DEFAULT_SETTINGS = {
   enabled: true,
   triggerMode: "single",
-  repeatIntervalMs: 120
+  repeatIntervalMs: 120,
+  persistentPopupEnabled: false
 };
 
 export const MESSAGE_TYPES = {

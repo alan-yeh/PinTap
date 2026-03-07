@@ -2,6 +2,58 @@ import { MESSAGE_TYPES } from "../shared/constants.js";
 import { getDefaultData, loadData, saveData } from "../shared/storage.js";
 
 let activeTabId = null;
+let persistentPopupWindowId = null;
+const POPUP_STATUS_MESSAGE = "PINTAP_POPUP_STATUS";
+const OPEN_PERSISTENT_POPUP_MESSAGE = "PINTAP_OPEN_PERSISTENT_POPUP";
+const CLOSE_PERSISTENT_POPUP_MESSAGE = "PINTAP_CLOSE_PERSISTENT_POPUP";
+const GET_ACTIVE_TAB_ID_MESSAGE = "PINTAP_GET_ACTIVE_TAB_ID";
+const OPEN_OPTIONS_PAGE_MESSAGE = "PINTAP_OPEN_OPTIONS_PAGE";
+
+async function getPersistentPopupState() {
+  if (typeof persistentPopupWindowId !== "number") {
+    return { enabled: false };
+  }
+  try {
+    const win = await chrome.windows.get(persistentPopupWindowId);
+    return {
+      enabled: true,
+      windowId: win.id
+    };
+  } catch (_error) {
+    persistentPopupWindowId = null;
+    return { enabled: false };
+  }
+}
+
+async function openPersistentPopupWindow() {
+  const current = await getPersistentPopupState();
+  if (current.enabled && typeof current.windowId === "number") {
+    await chrome.windows.update(current.windowId, { focused: true });
+    return current;
+  }
+
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL("src/popup/popup.html?persistent=1"),
+    type: "popup",
+    width: 360,
+    height: 640,
+    focused: true
+  });
+  persistentPopupWindowId = win.id ?? null;
+  return {
+    enabled: typeof win.id === "number",
+    windowId: win.id
+  };
+}
+
+async function closePersistentPopupWindow() {
+  const current = await getPersistentPopupState();
+  if (current.enabled && typeof current.windowId === "number") {
+    await chrome.windows.remove(current.windowId);
+  }
+  persistentPopupWindowId = null;
+  return { enabled: false };
+}
 
 async function ensureStorageInitialized() {
   const data = await loadData();
@@ -63,12 +115,22 @@ async function syncActiveTabFromLastFocusedWindow() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void ensureStorageInitialized();
+  void ensureStorageInitialized().then(async () => {
+    const data = await loadData();
+    if (data.settings?.persistentPopupEnabled) {
+      await openPersistentPopupWindow();
+    }
+  });
   void syncActiveTabFromLastFocusedWindow();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void ensureStorageInitialized();
+  void ensureStorageInitialized().then(async () => {
+    const data = await loadData();
+    if (data.settings?.persistentPopupEnabled) {
+      await openPersistentPopupWindow();
+    }
+  });
   void syncActiveTabFromLastFocusedWindow();
 });
 
@@ -78,6 +140,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
   void syncActiveTabForWindow(windowId);
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (persistentPopupWindowId === windowId) {
+    persistentPopupWindowId = null;
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -91,6 +159,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (message?.type === POPUP_STATUS_MESSAGE) {
+    void getPersistentPopupState().then((state) => sendResponse(state));
+    return true;
+  }
+
+  if (message?.type === OPEN_PERSISTENT_POPUP_MESSAGE) {
+    void openPersistentPopupWindow().then((state) => sendResponse(state));
+    return true;
+  }
+
+  if (message?.type === CLOSE_PERSISTENT_POPUP_MESSAGE) {
+    void closePersistentPopupWindow().then((state) => sendResponse(state));
+    return true;
+  }
+
+  if (message?.type === GET_ACTIVE_TAB_ID_MESSAGE) {
+    sendResponse({
+      activeTabId: typeof activeTabId === "number" ? activeTabId : null,
+      senderTabId: typeof sender.tab?.id === "number" ? sender.tab.id : null
+    });
+    return true;
+  }
+
+  if (message?.type === OPEN_OPTIONS_PAGE_MESSAGE) {
+    void chrome.runtime.openOptionsPage().then(() => {
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
   return false;
 });
 

@@ -15,10 +15,20 @@
     "type": "module"
   },
   "action": {
-    "default_title": "PinTap",
-    "default_popup": "src/popup/popup.html"
+    "default_title": "PinTap"
   },
   "options_page": "src/options/options.html",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/resources/*",
+        "resources/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "content_scripts": [
     {
       "matches": [

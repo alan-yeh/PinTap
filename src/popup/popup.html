@@ -41,6 +41,28 @@
         color: #93c5fd;
         min-height: 18px;
       }
+      .controls {
+        margin: 8px 0 12px;
+        padding: 10px;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        background: #111827;
+      }
+      .controls-title {
+        font-size: 12px;
+        margin-bottom: 8px;
+        color: #cbd5e1;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      #uiState {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #94a3b8;
+      }
     </style>
   </head>
   <body>
@@ -58,6 +80,20 @@
     <div class="row">
       <label for="repeatIntervalMs">连发间隔(ms)</label>
       <input id="repeatIntervalMs" type="number" min="50" max="1000" step="10" />
+    </div>
+    <div class="row">
+      <label for="persistentPopup">界面常驻</label>
+      <input id="persistentPopup" type="checkbox" />
+    </div>
+    <div class="controls">
+      <div class="controls-title">页面控制</div>
+      <div class="grid">
+        <button id="toggleEdit">进入编辑</button>
+        <button id="toggleAdd">新增标识</button>
+        <button id="clearAll">清空标识</button>
+        <button id="toggleCalibration">开启校准</button>
+      </div>
+      <div id="uiState"></div>
     </div>
     <div class="row">
       <button id="openOptions">打开高级设置</button>

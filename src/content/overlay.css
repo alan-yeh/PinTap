@@ -8,30 +8,86 @@
 
 #pintap-toolbar {
   position: fixed;
-  top: 12px;
-  right: 12px;
+  left: 24px;
+  top: 24px;
+  width: max-content;
+  height: 35px;
+  border-radius: 18px;
   display: flex;
-  gap: 8px;
-  padding: 8px;
-  border-radius: 10px;
-  background: rgba(20, 20, 24, 0.8);
-  color: #f1f5f9;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  padding: 0 15px;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #333333;
   pointer-events: auto;
-  backdrop-filter: blur(4px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
 }
 
-#pintap-toolbar button {
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 8px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: #f8fafc;
-  background: rgba(30, 41, 59, 0.8);
+#pintap-toolbar.theme-light {
+  background: #ffffff;
+  color: #333333;
+}
+
+#pintap-toolbar.theme-dark {
+  background: #1a3263;
+  color: #e8e2db;
+}
+
+#pintap-toolbar-title {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  margin-right: 0;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+#pintap-toolbar-drag-area {
+  min-width: 0;
+  flex: 0 0 auto;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: move;
+}
+
+#pintap-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.pintap-toolbar-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 
-#pintap-toolbar button:hover {
-  background: rgba(51, 65, 85, 0.95);
+.pintap-toolbar-btn img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.pintap-toolbar-btn span {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#pintap-toolbar.paused {
+  opacity: 0.92;
 }
 
 #pintap-toast {

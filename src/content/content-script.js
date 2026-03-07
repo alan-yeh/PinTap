@@ -3,7 +3,9 @@
   const DEFAULT_SETTINGS = {
     enabled: true,
     triggerMode: "single",
-    repeatIntervalMs: 120
+    repeatIntervalMs: 120,
+    toolbarPosX: 24,
+    toolbarPosY: 24
   };
   const MESSAGE_TYPES = {
     GET_ACTIVE_STATUS: "PINTAP_GET_ACTIVE_STATUS",
@@ -12,6 +14,12 @@
   const FRAME_KEYDOWN_MESSAGE = "PINTAP_FRAME_KEYDOWN";
   const FRAME_KEYUP_MESSAGE = "PINTAP_FRAME_KEYUP";
   const FRAME_CLICK_MESSAGE = "PINTAP_FRAME_CLICK";
+  const UI_GET_STATE_MESSAGE = "PINTAP_UI_GET_STATE";
+  const UI_TOGGLE_EDIT_MESSAGE = "PINTAP_UI_TOGGLE_EDIT";
+  const UI_TOGGLE_ADD_MESSAGE = "PINTAP_UI_TOGGLE_ADD";
+  const UI_CLEAR_ALL_MESSAGE = "PINTAP_UI_CLEAR_ALL";
+  const UI_TOGGLE_CALIBRATION_MESSAGE = "PINTAP_UI_TOGGLE_CALIBRATION";
+  const OPEN_OPTIONS_PAGE_MESSAGE = "PINTAP_OPEN_OPTIONS_PAGE";
   const MAX_FRAME_DEPTH = 8;
 
   if (window.__pintapInitialized) {
@@ -33,6 +41,13 @@
   let clickOffsetY = 0;
   let toastTimer = null;
   let clickTraceSeq = 0;
+  let toolbarPosX = 24;
+  let toolbarPosY = 24;
+  let isDraggingToolbar = false;
+  let toolbarDragOffsetX = 0;
+  let toolbarDragOffsetY = 0;
+  let toolbarDarkMode = false;
+  let themeRefreshTimer = 0;
   const repeatTimers = new Map();
   const handledKeyEvents = new WeakSet();
 
@@ -40,8 +55,6 @@
   root.id = "pintap-root";
   const markerLayer = document.createElement("div");
   markerLayer.id = "pintap-marker-layer";
-  const toolbar = document.createElement("div");
-  toolbar.id = "pintap-toolbar";
   const toast = document.createElement("div");
   toast.id = "pintap-toast";
   const clickProbe = document.createElement("div");
@@ -49,6 +62,15 @@
   const clickProbeLabel = document.createElement("div");
   clickProbeLabel.id = "pintap-click-probe-label";
   clickProbe.appendChild(clickProbeLabel);
+  const toolbar = document.createElement("div");
+  toolbar.id = "pintap-toolbar";
+  const toolbarDragArea = document.createElement("div");
+  toolbarDragArea.id = "pintap-toolbar-drag-area";
+  const toolbarTitle = document.createElement("div");
+  toolbarTitle.id = "pintap-toolbar-title";
+  toolbarTitle.textContent = "PinTap";
+  const toolbarControls = document.createElement("div");
+  toolbarControls.id = "pintap-toolbar-controls";
 
   function isContextInvalidatedError(error) {
     if (!(error instanceof Error)) {
@@ -227,7 +249,8 @@
     return markers.filter((marker) => candidates.includes(marker.key));
   }
 
-  async function captureNextKey(promptText) {
+  async function captureNextKey(promptText, options = {}) {
+    const { allowDeleteShortcut = false } = options;
     showToast(promptText);
     return new Promise((resolve) => {
       function onKeydown(event) {
@@ -237,6 +260,10 @@
         const candidates = collectEventKeyCandidates(event);
         if (candidates.includes("Escape")) {
           resolve("");
+          return;
+        }
+        if (allowDeleteShortcut && (candidates.includes("Delete") || candidates.includes("Backspace"))) {
+          resolve("__DELETE__");
           return;
         }
         resolve(candidates.find((item) => item.startsWith("Key") || item.startsWith("Digit")) || candidates[0] || "");
@@ -367,6 +394,411 @@
     clickProbe.classList.remove("visible");
   }
 
+  function setToolbarPosition(nextX, nextY) {
+    const toolbarWidth = Math.max(1, toolbar.offsetWidth || 1);
+    const toolbarHeight = Math.max(1, toolbar.offsetHeight || 1);
+    const maxX = Math.max(0, window.innerWidth - toolbarWidth);
+    const maxY = Math.max(0, window.innerHeight - toolbarHeight);
+    toolbarPosX = Math.max(0, Math.min(maxX, Math.round(nextX)));
+    toolbarPosY = Math.max(0, Math.min(maxY, Math.round(nextY)));
+    toolbar.style.left = `${toolbarPosX}px`;
+    toolbar.style.top = `${toolbarPosY}px`;
+  }
+
+  function parseCssColorToRgba(colorValue) {
+    if (typeof colorValue !== "string") {
+      return null;
+    }
+    const value = colorValue.trim().toLowerCase();
+    if (!value || value === "transparent") {
+      return null;
+    }
+    const rgbMatch = value.match(/^rgba?\(([^)]+)\)$/);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(",").map((part) => Number(part.trim()));
+      const r = Number.isFinite(parts[0]) ? parts[0] : 0;
+      const g = Number.isFinite(parts[1]) ? parts[1] : 0;
+      const b = Number.isFinite(parts[2]) ? parts[2] : 0;
+      const a = Number.isFinite(parts[3]) ? parts[3] : 1;
+      if (a <= 0) {
+        return null;
+      }
+      return { r, g, b, a };
+    }
+    const hexMatch = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hexMatch) {
+      const hex = hexMatch[1];
+      if (hex.length === 3) {
+        return {
+          r: parseInt(hex[0] + hex[0], 16),
+          g: parseInt(hex[1] + hex[1], 16),
+          b: parseInt(hex[2] + hex[2], 16),
+          a: 1
+        };
+      }
+      return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16),
+        a: 1
+      };
+    }
+    return null;
+  }
+
+  function getRelativeLuminance(rgb) {
+    function toLinear(channel) {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }
+    const r = toLinear(rgb.r);
+    const g = toLinear(rgb.g);
+    const b = toLinear(rgb.b);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function detectToolbarDarkModeFromPage() {
+    const elements = [document.body, document.documentElement];
+    for (const element of elements) {
+      if (!(element instanceof HTMLElement)) {
+        continue;
+      }
+      const bg = parseCssColorToRgba(window.getComputedStyle(element).backgroundColor);
+      if (!bg) {
+        continue;
+      }
+      return getRelativeLuminance(bg) < 0.46;
+    }
+
+    const fallbackMedia =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : false;
+    return fallbackMedia;
+  }
+
+  function getToolbarThemeSuffix() {
+    return toolbarDarkMode ? "dark" : "light";
+  }
+
+  function getIconFilenameCandidates(iconName, themeSuffix) {
+    if (iconName === "play") {
+      return [`play-${themeSuffix}.png`, `play-circle-${themeSuffix}.png`];
+    }
+    if (iconName === "setting" && themeSuffix === "light") {
+      return ["setting-light.png", "setting-light-dark.png"];
+    }
+    return [`${iconName}-${themeSuffix}.png`];
+  }
+
+  function setToolbarButtonIcon(button, iconName, fallbackText) {
+    const iconImg = button.querySelector("img");
+    const fallback = button.querySelector("span");
+    if (!(iconImg instanceof HTMLImageElement) || !(fallback instanceof HTMLElement)) {
+      return;
+    }
+    iconImg.style.display = "";
+    fallback.style.display = "none";
+    const themeSuffix = getToolbarThemeSuffix();
+    const filenames = getIconFilenameCandidates(iconName, themeSuffix);
+    const baseDirs = ["src/resources", "resources"];
+    const candidates = [];
+    filenames.forEach((filename) => {
+      baseDirs.forEach((baseDir) => {
+        candidates.push(chrome.runtime.getURL(`${baseDir}/${filename}`));
+      });
+    });
+    let idx = 0;
+    iconImg.onerror = () => {
+      idx += 1;
+      if (idx < candidates.length) {
+        iconImg.src = candidates[idx];
+        return;
+      }
+      iconImg.style.display = "none";
+      fallback.style.display = "inline";
+    };
+    iconImg.src = candidates[0];
+  }
+
+  function applyToolbarThemeClass() {
+    toolbar.classList.toggle("theme-dark", toolbarDarkMode);
+    toolbar.classList.toggle("theme-light", !toolbarDarkMode);
+  }
+
+  function refreshAllToolbarIcons() {
+    const buttons = toolbarControls.querySelectorAll(".pintap-toolbar-btn");
+    buttons.forEach((button) => {
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+      const iconName = button.dataset.iconName || "";
+      const fallbackText = button.dataset.fallbackText || "?";
+      if (!iconName) {
+        return;
+      }
+      setToolbarButtonIcon(button, iconName, fallbackText);
+    });
+  }
+
+  function refreshToolbarThemeMode() {
+    const nextDark = detectToolbarDarkModeFromPage();
+    if (nextDark !== toolbarDarkMode) {
+      toolbarDarkMode = nextDark;
+      applyToolbarThemeClass();
+      refreshAllToolbarIcons();
+    }
+  }
+
+  function scheduleToolbarThemeRefresh() {
+    if (themeRefreshTimer) {
+      return;
+    }
+    themeRefreshTimer = window.setTimeout(() => {
+      themeRefreshTimer = 0;
+      refreshToolbarThemeMode();
+    }, 120);
+  }
+
+  function createToolbarButton({ action, title, iconName, fallbackText, onClick }) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pintap-toolbar-btn";
+    btn.dataset.action = action;
+    btn.dataset.iconName = iconName;
+    btn.dataset.fallbackText = fallbackText;
+    btn.title = title;
+
+    const img = document.createElement("img");
+    img.alt = title;
+    img.draggable = false;
+    const fallback = document.createElement("span");
+    fallback.textContent = fallbackText;
+    fallback.style.display = "none";
+    btn.append(img, fallback);
+    setToolbarButtonIcon(btn, iconName, fallbackText);
+
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void onClick();
+    });
+    return btn;
+  }
+
+  async function persistSettings() {
+    try {
+      const data = await loadData();
+      data.settings = {
+        ...DEFAULT_SETTINGS,
+        ...(data.settings || {}),
+        ...settings
+      };
+      await chrome.storage.local.set({ [STORAGE_KEY]: data });
+    } catch (_error) {
+      // Ignore temporary extension API failures.
+    }
+  }
+
+  async function persistToolbarPosition() {
+    settings.toolbarPosX = toolbarPosX;
+    settings.toolbarPosY = toolbarPosY;
+    await persistSettings();
+  }
+
+  function syncToolbarUi() {
+    if (!isTopWindow) {
+      return;
+    }
+    const pauseButton = toolbarControls.querySelector('[data-action="toggle-enabled"]');
+    if (pauseButton instanceof HTMLButtonElement) {
+      const enabled = Boolean(settings.enabled);
+      setToolbarButtonIcon(pauseButton, enabled ? "pause" : "play", enabled ? "II" : ">");
+      pauseButton.title = enabled ? "暂停 PinTap" : "启用 PinTap";
+    }
+    const editButton = toolbarControls.querySelector('[data-action="edit"]');
+    const addButton = toolbarControls.querySelector('[data-action="add"]');
+    const removeButton = toolbarControls.querySelector('[data-action="remove"]');
+    const clearButton = toolbarControls.querySelector('[data-action="clear"]');
+    const saveButton = toolbarControls.querySelector('[data-action="save"]');
+    if (editButton instanceof HTMLElement) {
+      editButton.style.display = editMode ? "none" : "inline-flex";
+    }
+    [addButton, removeButton, clearButton, saveButton].forEach((item) => {
+      if (item instanceof HTMLElement) {
+        item.style.display = editMode ? "inline-flex" : "none";
+      }
+    });
+    refreshToolbarThemeMode();
+    toolbar.classList.toggle("paused", !settings.enabled);
+    setToolbarPosition(toolbarPosX, toolbarPosY);
+  }
+
+  function initToolbar() {
+    if (!isTopWindow) {
+      return;
+    }
+    toolbarControls.innerHTML = "";
+    toolbarDarkMode = detectToolbarDarkModeFromPage();
+    applyToolbarThemeClass();
+
+    const toggleEnabledBtn = createToolbarButton({
+      action: "toggle-enabled",
+      title: "暂停 PinTap",
+      iconName: "pause",
+      fallbackText: "II",
+      onClick: async () => {
+        settings.enabled = !settings.enabled;
+        if (!settings.enabled) {
+          addingMode = false;
+          calibrationMode = false;
+          editMode = false;
+          selectedMarkerId = null;
+          hideClickProbe();
+          stopAllRepeats();
+        }
+        await persistSettings();
+        syncToolbarUi();
+        render();
+      }
+    });
+
+    const editBtn = createToolbarButton({
+      action: "edit",
+      title: "编辑键位",
+      iconName: "edit-square",
+      fallbackText: "E",
+      onClick: async () => {
+        if (!settings.enabled) {
+          showToast("请先启用 PinTap");
+          return;
+        }
+        editMode = true;
+        addingMode = false;
+        calibrationMode = false;
+        render();
+      }
+    });
+
+    const addBtn = createToolbarButton({
+      action: "add",
+      title: "新增键位",
+      iconName: "plus-circle",
+      fallbackText: "+",
+      onClick: async () => {
+        if (!settings.enabled) {
+          showToast("请先启用 PinTap");
+          return;
+        }
+        if (!editMode) {
+          editMode = true;
+        }
+        addingMode = true;
+        showToast("点击页面放置新标识");
+        render();
+      }
+    });
+
+    const removeBtn = createToolbarButton({
+      action: "remove",
+      title: "删除选中键位",
+      iconName: "minus-circle",
+      fallbackText: "-",
+      onClick: async () => {
+        if (!selectedMarkerId) {
+          showToast("请先选中一个标识");
+          return;
+        }
+        markers = markers.filter((item) => item.id !== selectedMarkerId);
+        selectedMarkerId = null;
+        await persistMarkers();
+        render();
+      }
+    });
+
+    const clearBtn = createToolbarButton({
+      action: "clear",
+      title: "清除全部键位",
+      iconName: "clear",
+      fallbackText: "C",
+      onClick: async () => {
+        const ok = window.confirm("确认清除当前站点的所有标识吗？");
+        if (!ok) {
+          return;
+        }
+        markers = [];
+        selectedMarkerId = null;
+        await persistMarkers();
+        render();
+      }
+    });
+
+    const saveBtn = createToolbarButton({
+      action: "save",
+      title: "保存当前配置",
+      iconName: "save",
+      fallbackText: "S",
+      onClick: async () => {
+        await persistMarkers();
+        await persistOffsets();
+        await persistSettings();
+        editMode = false;
+        addingMode = false;
+        calibrationMode = false;
+        selectedMarkerId = null;
+        showToast("已保存");
+        render();
+      }
+    });
+
+    const settingsBtn = createToolbarButton({
+      action: "settings",
+      title: "打开高级设置",
+      iconName: "setting",
+      fallbackText: "O",
+      onClick: async () => {
+        await chrome.runtime.sendMessage({ type: OPEN_OPTIONS_PAGE_MESSAGE });
+      }
+    });
+
+    toolbarControls.append(
+      toggleEnabledBtn,
+      editBtn,
+      addBtn,
+      removeBtn,
+      clearBtn,
+      saveBtn,
+      settingsBtn
+    );
+    toolbarDragArea.appendChild(toolbarTitle);
+    toolbar.append(toolbarDragArea, toolbarControls);
+    refreshAllToolbarIcons();
+    syncToolbarUi();
+    setToolbarPosition(toolbarPosX, toolbarPosY);
+    const observer = new MutationObserver(() => {
+      scheduleToolbarThemeRefresh();
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "style", "data-theme"]
+    });
+    if (document.body) {
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"]
+      });
+    }
+    window.addEventListener("focus", scheduleToolbarThemeRefresh, true);
+    window.addEventListener("load", scheduleToolbarThemeRefresh, true);
+    document.addEventListener("visibilitychange", scheduleToolbarThemeRefresh, true);
+
+    toolbarDragArea.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      isDraggingToolbar = true;
+      toolbarDragOffsetX = event.clientX - toolbarPosX;
+      toolbarDragOffsetY = event.clientY - toolbarPosY;
+    });
+  }
+
   function resolveClickableTarget(node) {
     if (!(node instanceof Element)) {
       return null;
@@ -403,69 +835,73 @@
     });
   }
 
-  function renderToolbar() {
-    toolbar.innerHTML = "";
+  function getUiState() {
+    return {
+      editMode,
+      addingMode,
+      calibrationMode,
+      clickOffsetX,
+      clickOffsetY,
+      markerCount: markers.length
+    };
+  }
 
-    const title = document.createElement("button");
-    title.textContent = "PinTap";
-    title.disabled = true;
-
-    const editBtn = document.createElement("button");
-    editBtn.textContent = editMode ? "编辑中" : "编辑";
-    editBtn.addEventListener("click", () => {
-      editMode = !editMode;
-      addingMode = false;
-      if (!editMode) {
-        selectedMarkerId = null;
-        hideClickProbe();
-      }
-      render();
-    });
-
-    const addBtn = document.createElement("button");
-    addBtn.textContent = addingMode ? "点击页面放置..." : "新增";
-    addBtn.addEventListener("click", () => {
-      if (!editMode) {
-        editMode = true;
-      }
-      addingMode = !addingMode;
-      showToast(addingMode ? "点击页面放置新标识" : "已取消新增");
-      render();
-    });
-
-    const clearBtn = document.createElement("button");
-    clearBtn.textContent = "清空";
-    clearBtn.addEventListener("click", async () => {
-      const ok = window.confirm("确认清除当前站点的所有标识吗？");
-      if (!ok) {
-        return;
-      }
-      markers = [];
+  function toggleEditMode() {
+    editMode = !editMode;
+    addingMode = false;
+    if (!editMode) {
+      calibrationMode = false;
       selectedMarkerId = null;
-      await persistMarkers();
-      render();
-      showToast("已清除全部标识");
-    });
+      hideClickProbe();
+    }
+    render();
+    syncToolbarUi();
+    return getUiState();
+  }
 
-    const calibrationBtn = document.createElement("button");
-    calibrationBtn.textContent = calibrationMode
-      ? `校准中 (${clickOffsetX}, ${clickOffsetY})`
-      : "校准";
-    calibrationBtn.addEventListener("click", () => {
-      calibrationMode = !calibrationMode;
-      if (calibrationMode) {
-        showToast("校准模式: 方向键微调, Shift+方向键步长5, Enter退出");
-      } else {
-        showToast(`校准完成: X ${clickOffsetX}, Y ${clickOffsetY}`);
-      }
-      renderToolbar();
-    });
+  function toggleAddMode() {
+    if (!editMode) {
+      editMode = true;
+    }
+    addingMode = !addingMode;
+    showToast(addingMode ? "点击页面放置新标识" : "已取消新增");
+    render();
+    syncToolbarUi();
+    return getUiState();
+  }
 
-    toolbar.append(title, editBtn, addBtn, clearBtn, calibrationBtn);
+  async function clearAllMarkers() {
+    markers = [];
+    selectedMarkerId = null;
+    await persistMarkers();
+    render();
+    showToast("已清除全部标识");
+    syncToolbarUi();
+    return getUiState();
+  }
+
+  function toggleCalibrationMode() {
+    if (!editMode) {
+      editMode = true;
+    }
+    calibrationMode = !calibrationMode;
+    if (calibrationMode) {
+      showToast("校准模式: 方向键微调, Shift+方向键步长5, Enter退出");
+    } else {
+      showToast(`校准完成: X ${clickOffsetX}, Y ${clickOffsetY}`);
+      hideClickProbe();
+    }
+    render();
+    syncToolbarUi();
+    return getUiState();
   }
 
   function renderMarkers() {
     if (!isTopWindow) {
+      markerLayer.innerHTML = "";
+      return;
+    }
+    if (!settings.enabled) {
       markerLayer.innerHTML = "";
       return;
     }
@@ -491,7 +927,7 @@
       }
 
       el.addEventListener("click", (event) => {
-        if (!editMode) {
+        if (!settings.enabled) {
           return;
         }
         event.stopPropagation();
@@ -504,9 +940,21 @@
           return;
         }
         event.stopPropagation();
-        const captured = await captureNextKey("按下新键位，Esc 取消");
+        const captured = await captureNextKey("按下新键位，Esc 取消；Delete/Backspace 删除标识", {
+          allowDeleteShortcut: true
+        });
         if (!captured) {
           showToast("已取消键位设置");
+          return;
+        }
+        if (captured === "__DELETE__") {
+          markers = markers.filter((item) => item.id !== marker.id);
+          if (selectedMarkerId === marker.id) {
+            selectedMarkerId = null;
+          }
+          await persistMarkers();
+          render();
+          showToast("标识已删除");
           return;
         }
         if (hasKeyConflict(captured, marker.id)) {
@@ -543,11 +991,11 @@
   }
 
   function render() {
-    renderToolbar();
     renderMarkers();
     if (!editMode) {
       hideClickProbe();
     }
+    syncToolbarUi();
   }
 
   async function createMarkerAtPoint(clientX, clientY) {
@@ -585,7 +1033,7 @@
         if (!addingMode || !editMode) {
           return;
         }
-        if (toolbar.contains(event.target)) {
+        if (isTopWindow && toolbar.contains(event.target)) {
           return;
         }
         addingMode = false;
@@ -598,6 +1046,13 @@
     document.addEventListener(
       "mousemove",
       (event) => {
+        if (isDraggingToolbar) {
+          setToolbarPosition(
+            event.clientX - toolbarDragOffsetX,
+            event.clientY - toolbarDragOffsetY
+          );
+          return;
+        }
         if (!draggingMarkerId || !editMode) {
           return;
         }
@@ -615,6 +1070,10 @@
     document.addEventListener(
       "mouseup",
       () => {
+        if (isDraggingToolbar) {
+          isDraggingToolbar = false;
+          void persistToolbarPosition();
+        }
         if (!draggingMarkerId) {
           return;
         }
@@ -623,6 +1082,10 @@
       },
       true
     );
+
+    window.addEventListener("resize", () => {
+      setToolbarPosition(toolbarPosX, toolbarPosY);
+    });
 
     function keyboardEnabledForCurrentPage() {
       if (!settings.enabled) {
@@ -662,12 +1125,12 @@
         } else if (candidates.includes("Enter")) {
           calibrationMode = false;
           showToast(`校准完成: X ${clickOffsetX}, Y ${clickOffsetY}`);
-          renderToolbar();
+          render();
           return;
         }
         if (changed) {
           void persistOffsets();
-          renderToolbar();
+          render();
           showToast(`校准偏移: X ${clickOffsetX}, Y ${clickOffsetY}`);
           return;
         }
@@ -680,7 +1143,7 @@
         return;
       }
 
-      if (editMode && candidates.includes("Delete")) {
+      if (editMode && (candidates.includes("Delete") || candidates.includes("Backspace"))) {
         if (!selectedMarkerId) {
           showToast("请先选中一个标识");
           return;
@@ -875,6 +1338,10 @@
   async function hydrateFromStorage() {
     const data = await loadData();
     settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+    if (Number.isFinite(settings.toolbarPosX) && Number.isFinite(settings.toolbarPosY)) {
+      toolbarPosX = Number(settings.toolbarPosX);
+      toolbarPosY = Number(settings.toolbarPosY);
+    }
     const profile = data.profilesByOrigin[origin] || { markers: [] };
     markers = Array.isArray(profile.markers) ? profile.markers : [];
     clickOffsetX = Number(profile.clickOffsetX) || 0;
@@ -897,14 +1364,41 @@
 
   function setupRuntimeMessage() {
     try {
-      chrome.runtime.onMessage.addListener((message) => {
+      chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (message?.type === MESSAGE_TYPES.ACTIVE_STATUS) {
           isActiveTab = Boolean(message.isActive);
           if (!isActiveTab) {
             stopAllRepeats();
           }
           renderMarkers();
+          return false;
         }
+
+        if (!isTopWindow) {
+          return false;
+        }
+
+        if (message?.type === UI_GET_STATE_MESSAGE) {
+          sendResponse(getUiState());
+          return true;
+        }
+        if (message?.type === UI_TOGGLE_EDIT_MESSAGE) {
+          sendResponse(toggleEditMode());
+          return true;
+        }
+        if (message?.type === UI_TOGGLE_ADD_MESSAGE) {
+          sendResponse(toggleAddMode());
+          return true;
+        }
+        if (message?.type === UI_CLEAR_ALL_MESSAGE) {
+          void clearAllMarkers().then((state) => sendResponse(state));
+          return true;
+        }
+        if (message?.type === UI_TOGGLE_CALIBRATION_MESSAGE) {
+          sendResponse(toggleCalibrationMode());
+          return true;
+        }
+        return false;
       });
     } catch (_error) {
       // Ignore extension context detach.
@@ -929,6 +1423,7 @@
   async function bootstrap() {
     try {
       await ensureRootMounted();
+      initToolbar();
       bindDomEvents();
       watchStorageChanges();
       setupRuntimeMessage();
