@@ -249,6 +249,14 @@
     return markers.filter((marker) => candidates.includes(marker.key));
   }
 
+  function resolvePreferredBindingKey(candidates) {
+    return (
+      candidates.find((item) => item.startsWith("Key") || item.startsWith("Digit")) ||
+      candidates[0] ||
+      ""
+    );
+  }
+
   async function captureNextKey(promptText, options = {}) {
     const { allowDeleteShortcut = false } = options;
     showToast(promptText);
@@ -266,7 +274,7 @@
           resolve("__DELETE__");
           return;
         }
-        resolve(candidates.find((item) => item.startsWith("Key") || item.startsWith("Digit")) || candidates[0] || "");
+        resolve(resolvePreferredBindingKey(candidates));
       }
       document.addEventListener("keydown", onKeydown, true);
     });
@@ -693,7 +701,7 @@
           editMode = true;
         }
         addingMode = true;
-        showToast("点击页面放置新标识");
+        showToast("点击页面放置新标识，放置后按键绑定");
         render();
       }
     });
@@ -864,7 +872,7 @@
       editMode = true;
     }
     addingMode = !addingMode;
-    showToast(addingMode ? "点击页面放置新标识" : "已取消新增");
+    showToast(addingMode ? "点击页面放置新标识，放置后按键绑定" : "已取消新增");
     render();
     syncToolbarUi();
     return getUiState();
@@ -1002,27 +1010,18 @@
     const xRatio = clampRatio(clientX / window.innerWidth);
     const yRatio = clampRatio(clientY / window.innerHeight);
 
-    const code = await captureNextKey("请按一个键绑定到新标识");
-    if (!code) {
-      showToast("已取消新增");
-      return;
-    }
-    if (hasKeyConflict(code, "")) {
-      showToast(`键位冲突: ${formatKey(code)}`);
-      return;
-    }
-
     const marker = {
       id: String(Date.now()) + Math.random().toString(16).slice(2, 8),
-      key: code,
+      key: "",
       xRatio,
       yRatio,
       radius: 24,
       opacity: 0.8
     };
     markers.push(marker);
+    selectedMarkerId = marker.id;
     await persistMarkers();
-    showToast(`已添加: ${formatKey(code)}`);
+    showToast("已添加标识，按键即可绑定");
     render();
   }
 
@@ -1153,6 +1152,26 @@
         void persistMarkers();
         renderMarkers();
         showToast("已删除选中标识");
+        return;
+      }
+
+      if (editMode && selectedMarkerId) {
+        const bindKey = resolvePreferredBindingKey(candidates);
+        if (!bindKey) {
+          return;
+        }
+        const selectedMarker = markers.find((item) => item.id === selectedMarkerId);
+        if (!selectedMarker) {
+          return;
+        }
+        if (hasKeyConflict(bindKey, selectedMarker.id)) {
+          showToast(`键位冲突: ${formatKey(bindKey)}`);
+          return;
+        }
+        selectedMarker.key = bindKey;
+        void persistMarkers();
+        renderMarkers();
+        showToast(`已绑定: ${formatKey(bindKey)}`);
         return;
       }
 
