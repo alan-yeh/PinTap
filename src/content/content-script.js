@@ -51,6 +51,15 @@
   let toolbarDragOffsetY = 0;
   let toolbarDarkMode = false;
   let themeRefreshTimer = 0;
+  let siteScript = { loop: false, steps: [] };
+  let scriptRunning = false;
+  let scriptPaused = false;
+  let scriptStopRequested = false;
+  let scriptRunToken = 0;
+  let scriptCountdownTimer = 0;
+  let scriptCurrentStepIndex = -1;
+  let scriptCurrentStepKey = "";
+  let scriptCurrentRemainingMs = 0;
   const handledKeyEvents = new WeakSet();
 
   const root = document.createElement("div");
@@ -75,6 +84,46 @@
   toolbarTitle.textContent = "PinTap";
   const toolbarControls = document.createElement("div");
   toolbarControls.id = "pintap-toolbar-controls";
+  const toolbarScriptInfo = document.createElement("div");
+  toolbarScriptInfo.id = "pintap-toolbar-script-info";
+  const toolbarScriptInfoText = document.createElement("div");
+  toolbarScriptInfoText.id = "pintap-toolbar-script-info-text";
+  toolbarScriptInfo.appendChild(toolbarScriptInfoText);
+
+  function getDefaultScript() {
+    return {
+      loop: false,
+      steps: []
+    };
+  }
+
+  function normalizeScriptStep(rawStep, index) {
+    if (!rawStep || typeof rawStep !== "object") {
+      return null;
+    }
+    const key = typeof rawStep.key === "string" ? rawStep.key.trim() : "";
+    if (!key) {
+      return null;
+    }
+    return {
+      id: typeof rawStep.id === "string" && rawStep.id ? rawStep.id : `step-${index + 1}`,
+      key,
+      waitMs: Math.max(0, Math.round(Number(rawStep.waitMs) || 0)),
+      waitOffsetMs: Math.max(0, Math.round(Number(rawStep.waitOffsetMs) || 0))
+    };
+  }
+
+  function normalizeScript(rawScript) {
+    if (!rawScript || typeof rawScript !== "object") {
+      return getDefaultScript();
+    }
+    const rawSteps = Array.isArray(rawScript.steps) ? rawScript.steps : [];
+    const steps = rawSteps.map(normalizeScriptStep).filter(Boolean);
+    return {
+      loop: Boolean(rawScript.loop),
+      steps
+    };
+  }
 
   function isContextInvalidatedError(error) {
     if (!(error instanceof Error)) {
@@ -209,9 +258,11 @@
       const prevProfile = data.profilesByOrigin[origin] || {};
       const prevMarkers = Array.isArray(prevProfile.markers) ? prevProfile.markers : [];
       data.profilesByOrigin[origin] = {
+        ...prevProfile,
         markers: Array.isArray(nextMarkers) ? nextMarkers : prevMarkers,
         clickOffsetX: Number.isFinite(nextOffsetX) ? nextOffsetX : Number(prevProfile.clickOffsetX) || 0,
-        clickOffsetY: Number.isFinite(nextOffsetY) ? nextOffsetY : Number(prevProfile.clickOffsetY) || 0
+        clickOffsetY: Number.isFinite(nextOffsetY) ? nextOffsetY : Number(prevProfile.clickOffsetY) || 0,
+        script: normalizeScript(prevProfile.script)
       };
       await chrome.storage.local.set({ [STORAGE_KEY]: data });
       return true;
@@ -678,6 +729,7 @@
   async function setMarkersEnabled(enabled, showStatusToast = true) {
     settings.markersEnabled = Boolean(enabled);
     if (!settings.markersEnabled) {
+      stopScriptExecution(false);
       addingMode = false;
       calibrationMode = false;
       editMode = false;
@@ -703,12 +755,51 @@
     const removeButton = toolbarControls.querySelector('[data-action="remove"]');
     const clearButton = toolbarControls.querySelector('[data-action="clear"]');
     const saveButton = toolbarControls.querySelector('[data-action="save"]');
+    const playButton = toolbarControls.querySelector('[data-action="play"]');
+    const pauseScriptButton = toolbarControls.querySelector('[data-action="script-pause"]');
+    const stopScriptButton = toolbarControls.querySelector('[data-action="script-stop"]');
     const settingsButton = toolbarControls.querySelector('[data-action="settings"]');
+    const disableMainButtonsInEdit = settings.markersEnabled && editMode;
+    const disableWhenMarkersOff = !settings.markersEnabled;
+    const defaultButtons = [
+      toggleButton,
+      editButton,
+      addButton,
+      removeButton,
+      clearButton,
+      saveButton,
+      playButton,
+      settingsButton
+    ];
+
+    if (scriptRunning) {
+      toolbar.classList.add("script-running");
+      defaultButtons.forEach((item) => {
+        if (item instanceof HTMLElement) {
+          item.style.display = "none";
+        }
+      });
+      if (stopScriptButton instanceof HTMLElement) {
+        stopScriptButton.style.display = "inline-flex";
+      }
+      if (pauseScriptButton instanceof HTMLElement) {
+        pauseScriptButton.style.display = "inline-flex";
+      }
+      toolbarScriptInfo.style.display = "inline-flex";
+      syncScriptPauseButtonUi();
+      updateToolbarScriptInfo();
+      refreshToolbarThemeMode();
+      setToolbarPosition(toolbarPosX, toolbarPosY);
+      return;
+    }
+    toolbar.classList.remove("script-running");
 
     if (toggleButton instanceof HTMLButtonElement) {
       toggleButton.title = settings.markersEnabled ? "禁用标识监听" : "启用标识监听";
       toggleButton.dataset.fallbackText = settings.markersEnabled ? "关" : "开";
       toggleButton.dataset.iconName = settings.markersEnabled ? "eye" : "eye-close";
+      toggleButton.style.display = "inline-flex";
+      toggleButton.disabled = disableMainButtonsInEdit;
       const fallback = toggleButton.querySelector("span");
       if (fallback instanceof HTMLElement) {
         fallback.textContent = toggleButton.dataset.fallbackText;
@@ -717,7 +808,10 @@
     }
 
     if (editButton instanceof HTMLElement) {
-      editButton.style.display = settings.markersEnabled && !editMode ? "inline-flex" : "none";
+      editButton.style.display = !editMode ? "inline-flex" : "none";
+      if (editButton instanceof HTMLButtonElement) {
+        editButton.disabled = disableWhenMarkersOff;
+      }
     }
     [addButton, removeButton, clearButton, saveButton].forEach((item) => {
       if (item instanceof HTMLElement) {
@@ -726,7 +820,24 @@
     });
     if (settingsButton instanceof HTMLElement) {
       settingsButton.style.display = "inline-flex";
+      if (settingsButton instanceof HTMLButtonElement) {
+        settingsButton.disabled = disableMainButtonsInEdit;
+      }
     }
+    if (playButton instanceof HTMLElement) {
+      playButton.style.display = "inline-flex";
+      if (playButton instanceof HTMLButtonElement) {
+        playButton.disabled = disableMainButtonsInEdit || disableWhenMarkersOff;
+      }
+    }
+    if (stopScriptButton instanceof HTMLElement) {
+      stopScriptButton.style.display = "none";
+    }
+    if (pauseScriptButton instanceof HTMLElement) {
+      pauseScriptButton.style.display = "none";
+    }
+    toolbarScriptInfo.style.display = "none";
+    toolbarScriptInfo.classList.remove("is-scrolling");
     refreshToolbarThemeMode();
     setToolbarPosition(toolbarPosX, toolbarPosY);
   }
@@ -839,6 +950,39 @@
       }
     });
 
+    const playBtn = createToolbarButton({
+      action: "play",
+      title: "启用脚本",
+      iconName: "play",
+      fallbackText: "P",
+      onClick: async () => {
+        startScriptExecution();
+      }
+    });
+
+    const pauseScriptBtn = createToolbarButton({
+      action: "script-pause",
+      title: "暂停脚本",
+      iconName: "pause",
+      fallbackText: "||",
+      onClick: async () => {
+        toggleScriptPause();
+      }
+    });
+
+    const stopScriptBtn = createToolbarButton({
+      action: "script-stop",
+      title: "停止脚本",
+      iconName: "close-circle",
+      fallbackText: "×",
+      onClick: async () => {
+        stopScriptExecution(true);
+      }
+    });
+
+    toolbarScriptInfoText.textContent = "";
+    toolbarScriptInfo.style.display = "none";
+
     toolbarControls.append(
       toggleEnabledBtn,
       editBtn,
@@ -846,9 +990,13 @@
       removeBtn,
       clearBtn,
       saveBtn,
+      playBtn,
+      pauseScriptBtn,
+      toolbarScriptInfo,
+      stopScriptBtn,
       settingsBtn
     );
-    toolbarDragArea.appendChild(toolbarTitle);
+    toolbarDragArea.append(toolbarTitle);
     toolbar.append(toolbarDragArea, toolbarControls);
     refreshAllToolbarIcons();
     syncToolbarUi();
@@ -912,6 +1060,237 @@
       flashMarker(marker.id);
       dispatchClickAtMarker(marker);
     });
+  }
+
+  function clearScriptCountdownTimer() {
+    if (!scriptCountdownTimer) {
+      return;
+    }
+    window.clearInterval(scriptCountdownTimer);
+    scriptCountdownTimer = 0;
+  }
+
+  function formatRemainingSeconds(remainingMs) {
+    return Math.max(0, Math.ceil((Number(remainingMs) || 0) / 1000));
+  }
+
+  function updateToolbarScriptInfo() {
+    if (!scriptRunning || scriptCurrentStepIndex < 0) {
+      toolbarScriptInfoText.textContent = "";
+      toolbarScriptInfo.classList.remove("is-scrolling");
+      return;
+    }
+    const remainingSeconds = formatRemainingSeconds(scriptCurrentRemainingMs);
+    toolbarScriptInfoText.textContent = `点击【${scriptCurrentStepKey}】，等待 ${remainingSeconds} 秒`;
+    window.requestAnimationFrame(() => {
+      const containerWidth = toolbarScriptInfo.clientWidth;
+      const textWidth = toolbarScriptInfoText.scrollWidth;
+      if (!containerWidth || textWidth <= containerWidth) {
+        toolbarScriptInfo.classList.remove("is-scrolling");
+        toolbarScriptInfo.style.removeProperty("--pintap-scroll-distance");
+        toolbarScriptInfo.style.removeProperty("--pintap-scroll-duration");
+        return;
+      }
+      const distance = textWidth - containerWidth;
+      const durationSeconds = Math.max(4, Math.round(distance / 35));
+      toolbarScriptInfo.classList.add("is-scrolling");
+      toolbarScriptInfo.style.setProperty("--pintap-scroll-distance", `${distance}px`);
+      toolbarScriptInfo.style.setProperty("--pintap-scroll-duration", `${durationSeconds}s`);
+    });
+  }
+
+  function syncScriptPauseButtonUi() {
+    const pauseButton = toolbarControls.querySelector('[data-action="script-pause"]');
+    if (!(pauseButton instanceof HTMLButtonElement)) {
+      return;
+    }
+    const nextPaused = Boolean(scriptPaused);
+    pauseButton.title = nextPaused ? "继续脚本" : "暂停脚本";
+    pauseButton.dataset.iconName = nextPaused ? "play" : "pause";
+    pauseButton.dataset.fallbackText = nextPaused ? "▶" : "||";
+    const fallback = pauseButton.querySelector("span");
+    if (fallback instanceof HTMLElement) {
+      fallback.textContent = pauseButton.dataset.fallbackText;
+    }
+    setToolbarButtonIcon(pauseButton, pauseButton.dataset.iconName, pauseButton.dataset.fallbackText);
+  }
+
+  function toggleScriptPause() {
+    if (!scriptRunning) {
+      return;
+    }
+    scriptPaused = !scriptPaused;
+    syncToolbarUi();
+    showToast(scriptPaused ? "脚本已暂停" : "脚本已继续");
+  }
+
+  function stopScriptExecution(showToastWhenStopped = false) {
+    const wasRunning = scriptRunning;
+    scriptStopRequested = true;
+    scriptRunning = false;
+    scriptPaused = false;
+    scriptCurrentStepIndex = -1;
+    scriptCurrentStepKey = "";
+    scriptCurrentRemainingMs = 0;
+    clearScriptCountdownTimer();
+    updateToolbarScriptInfo();
+    syncToolbarUi();
+    if (showToastWhenStopped && wasRunning) {
+      showToast("脚本已停止");
+    }
+  }
+
+  function buildScriptCandidates(stepKey) {
+    const normalized = normalizeCode(stepKey);
+    if (!normalized) {
+      return [];
+    }
+    const candidates = new Set();
+    candidates.add(normalized);
+    const fallback = keyToCodeFallback(normalized);
+    if (fallback) {
+      candidates.add(fallback);
+    }
+    return Array.from(candidates);
+  }
+
+  function getScriptStepTotalWaitMs(step) {
+    const baseWaitMs = Math.max(0, Math.round(Number(step?.waitMs) || 0));
+    const offsetMs = Math.max(0, Math.round(Number(step?.waitOffsetMs) || 0));
+    if (offsetMs <= 0) {
+      return baseWaitMs;
+    }
+    // Uniform random in [0, offsetMs], inclusive.
+    const randomOffsetMs = Math.floor(Math.random() * (offsetMs + 1));
+    return baseWaitMs + randomOffsetMs;
+  }
+
+  function waitStepCountdown(waitMs, token) {
+    return new Promise((resolve) => {
+      const totalMs = Math.max(0, Math.round(Number(waitMs) || 0));
+      if (totalMs <= 0) {
+        scriptCurrentRemainingMs = 0;
+        updateToolbarScriptInfo();
+        resolve(true);
+        return;
+      }
+      let lastTs = Date.now();
+      scriptCurrentRemainingMs = totalMs;
+
+      function tick() {
+        if (!scriptRunning || scriptStopRequested || token !== scriptRunToken) {
+          clearScriptCountdownTimer();
+          resolve(false);
+          return;
+        }
+        const nowTs = Date.now();
+        const deltaMs = Math.max(0, nowTs - lastTs);
+        lastTs = nowTs;
+        if (!scriptPaused) {
+          scriptCurrentRemainingMs = Math.max(0, scriptCurrentRemainingMs - deltaMs);
+        }
+        updateToolbarScriptInfo();
+        if (scriptCurrentRemainingMs <= 0) {
+          clearScriptCountdownTimer();
+          resolve(true);
+        }
+      }
+
+      scriptCountdownTimer = window.setInterval(tick, 200);
+      tick();
+    });
+  }
+
+  function waitUntilScriptResumed(token) {
+    return new Promise((resolve) => {
+      if (!scriptPaused) {
+        resolve(true);
+        return;
+      }
+      const timer = window.setInterval(() => {
+        if (!scriptRunning || scriptStopRequested || token !== scriptRunToken) {
+          window.clearInterval(timer);
+          resolve(false);
+          return;
+        }
+        if (!scriptPaused) {
+          window.clearInterval(timer);
+          resolve(true);
+        }
+      }, 120);
+    });
+  }
+
+  async function runScriptLoop() {
+    if (!scriptRunning) {
+      return;
+    }
+    const token = ++scriptRunToken;
+    scriptStopRequested = false;
+    const steps = Array.isArray(siteScript.steps) ? siteScript.steps : [];
+
+    if (!steps.length) {
+      stopScriptExecution(false);
+      showToast("当前站点脚本没有可执行步骤");
+      return;
+    }
+
+    do {
+      for (let index = 0; index < steps.length; index += 1) {
+        if (!scriptRunning || scriptStopRequested || token !== scriptRunToken) {
+          stopScriptExecution(false);
+          return;
+        }
+        const resumeOk = await waitUntilScriptResumed(token);
+        if (!resumeOk) {
+          stopScriptExecution(false);
+          return;
+        }
+        const step = steps[index];
+        scriptCurrentStepIndex = index;
+        scriptCurrentStepKey = formatKey(step.key);
+        const totalWaitMs = getScriptStepTotalWaitMs(step);
+        scriptCurrentRemainingMs = totalWaitMs;
+        updateToolbarScriptInfo();
+        triggerByCandidates(buildScriptCandidates(step.key));
+        const ok = await waitStepCountdown(totalWaitMs, token);
+        if (!ok) {
+          stopScriptExecution(false);
+          return;
+        }
+      }
+    } while (siteScript.loop && scriptRunning && !scriptStopRequested && token === scriptRunToken);
+
+    stopScriptExecution(false);
+    showToast("脚本执行完成");
+  }
+
+  function startScriptExecution() {
+    if (scriptRunning) {
+      return;
+    }
+    if (!settings.extensionEnabled || !settings.markersEnabled) {
+      showToast("请先启用标识监听");
+      return;
+    }
+    const steps = Array.isArray(siteScript.steps) ? siteScript.steps : [];
+    if (!steps.length) {
+      showToast("当前站点脚本没有可执行步骤");
+      return;
+    }
+    addingMode = false;
+    calibrationMode = false;
+    editMode = false;
+    selectedMarkerId = null;
+    hideClickProbe();
+    scriptRunning = true;
+    scriptPaused = false;
+    scriptStopRequested = false;
+    scriptCurrentStepIndex = -1;
+    scriptCurrentStepKey = "";
+    scriptCurrentRemainingMs = 0;
+    syncToolbarUi();
+    void runScriptLoop();
   }
 
   function getUiState() {
@@ -1218,6 +1597,9 @@
       if (!candidates.length) {
         return;
       }
+      if (scriptRunning) {
+        return;
+      }
 
       if (calibrationMode && isTopWindow) {
         const step = shiftPressed ? 5 : 1;
@@ -1417,6 +1799,10 @@
     markers = Array.isArray(profile.markers) ? profile.markers : [];
     clickOffsetX = Number(profile.clickOffsetX) || 0;
     clickOffsetY = Number(profile.clickOffsetY) || 0;
+    siteScript = normalizeScript(profile.script);
+    if (scriptRunning && !siteScript.steps.length) {
+      stopScriptExecution(false);
+    }
     render();
   }
 
@@ -1445,6 +1831,7 @@
         if (message?.type === MESSAGE_TYPES.EXTENSION_STATUS) {
           settings.extensionEnabled = Boolean(message.extensionEnabled);
           if (!settings.extensionEnabled) {
+            stopScriptExecution(false);
             addingMode = false;
             calibrationMode = false;
             editMode = false;

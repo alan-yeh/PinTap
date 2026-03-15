@@ -194,6 +194,28 @@
         </thead>
         <tbody id="markersBody"></tbody>
       </table>
+
+      <h3>站点脚本</h3>
+      <div class="row">
+        <label for="scriptLoop">循环执行</label>
+        <input id="scriptLoop" type="checkbox" />
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>步骤</th>
+            <th>按钮键值</th>
+            <th>等待（秒）</th>
+            <th>等待偏差（秒）</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="scriptStepsBody"></tbody>
+      </table>
+      <div class="row">
+        <button id="addScriptStep">新增步骤</button>
+        <button id="saveScript">保存脚本</button>
+      </div>
     </section>
 
     <div class="status" id="status"></div>

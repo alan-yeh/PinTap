@@ -15,6 +15,10 @@ const saveSettingsEl = document.querySelector("#saveSettings");
 const originSelectEl = document.querySelector("#originSelect");
 const deleteOriginEl = document.querySelector("#deleteOrigin");
 const markersBodyEl = document.querySelector("#markersBody");
+const scriptLoopEl = document.querySelector("#scriptLoop");
+const scriptStepsBodyEl = document.querySelector("#scriptStepsBody");
+const addScriptStepEl = document.querySelector("#addScriptStep");
+const saveScriptEl = document.querySelector("#saveScript");
 const statusEl = document.querySelector("#status");
 
 let dataCache = null;
@@ -104,6 +108,142 @@ function getMarkerColorProfile(backgroundHex, opacity) {
   };
 }
 
+function createStepId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `step-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+function getDefaultScript() {
+  return {
+    loop: false,
+    steps: []
+  };
+}
+
+function normalizeScriptStep(rawStep, index) {
+  if (!rawStep || typeof rawStep !== "object") {
+    return null;
+  }
+  const key = typeof rawStep.key === "string" ? rawStep.key.trim() : "";
+  if (!key) {
+    return null;
+  }
+  const waitMs = Math.max(0, Math.round(Number(rawStep.waitMs) || 0));
+  const waitOffsetMs = Math.max(0, Math.round(Number(rawStep.waitOffsetMs) || 0));
+  return {
+    id: typeof rawStep.id === "string" && rawStep.id ? rawStep.id : `step-${index + 1}`,
+    key,
+    waitMs,
+    waitOffsetMs
+  };
+}
+
+function normalizeScript(rawScript) {
+  if (!rawScript || typeof rawScript !== "object") {
+    return getDefaultScript();
+  }
+  const rawSteps = Array.isArray(rawScript.steps) ? rawScript.steps : [];
+  const steps = rawSteps.map(normalizeScriptStep).filter(Boolean);
+  return {
+    loop: Boolean(rawScript.loop),
+    steps
+  };
+}
+
+function ensureProfile(origin) {
+  if (!origin) {
+    return null;
+  }
+  if (!dataCache.profilesByOrigin[origin] || typeof dataCache.profilesByOrigin[origin] !== "object") {
+    dataCache.profilesByOrigin[origin] = {};
+  }
+  const profile = dataCache.profilesByOrigin[origin];
+  if (!Array.isArray(profile.markers)) {
+    profile.markers = [];
+  }
+  profile.script = normalizeScript(profile.script);
+  return profile;
+}
+
+function formatWaitSeconds(waitMs) {
+  const seconds = Math.max(0, Number(waitMs) || 0) / 1000;
+  return Number.isInteger(seconds) ? String(seconds) : String(seconds.toFixed(3)).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function setScriptEditorDisabled(disabled) {
+  scriptLoopEl.disabled = disabled;
+  addScriptStepEl.disabled = disabled;
+  saveScriptEl.disabled = disabled;
+}
+
+function renderScriptStepRow(step, index) {
+  const row = document.createElement("tr");
+  row.dataset.id = step.id;
+  row.innerHTML = `
+      <td>${index + 1}</td>
+      <td><input type="text" data-field="key" placeholder="例如 A / Enter" /></td>
+      <td><input type="number" min="0" step="0.1" data-field="waitSeconds" /></td>
+      <td><input type="number" min="0" step="0.1" data-field="waitOffsetSeconds" placeholder="默认 0" /></td>
+      <td><button class="btn-danger" data-action="delete-step">删除</button></td>
+    `;
+  const keyInput = row.querySelector('[data-field="key"]');
+  if (keyInput instanceof HTMLInputElement) {
+    keyInput.value = step.key;
+  }
+  const waitInput = row.querySelector('[data-field="waitSeconds"]');
+  if (waitInput instanceof HTMLInputElement) {
+    waitInput.value = formatWaitSeconds(step.waitMs);
+  }
+  const waitOffsetInput = row.querySelector('[data-field="waitOffsetSeconds"]');
+  if (waitOffsetInput instanceof HTMLInputElement) {
+    waitOffsetInput.value = formatWaitSeconds(step.waitOffsetMs);
+  }
+  row.querySelector('[data-action="delete-step"]').addEventListener("click", () => {
+    row.remove();
+    refreshScriptStepIndexes();
+  });
+  return row;
+}
+
+function refreshScriptStepIndexes() {
+  const rows = scriptStepsBodyEl.querySelectorAll("tr[data-id]");
+  rows.forEach((row, index) => {
+    const cell = row.querySelector("td");
+    if (cell) {
+      cell.textContent = String(index + 1);
+    }
+  });
+}
+
+function renderScriptEditor() {
+  scriptStepsBodyEl.innerHTML = "";
+  const origin = selectedOrigin();
+  const profile = ensureProfile(origin);
+  if (!origin || !profile) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.innerHTML = `<td colspan="5">请选择一个站点后编辑脚本</td>`;
+    scriptStepsBodyEl.appendChild(emptyRow);
+    scriptLoopEl.checked = false;
+    setScriptEditorDisabled(true);
+    return;
+  }
+  setScriptEditorDisabled(false);
+  scriptLoopEl.checked = Boolean(profile.script.loop);
+  const steps = Array.isArray(profile.script.steps) ? profile.script.steps : [];
+  if (!steps.length) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.innerHTML = `<td colspan="5">当前站点暂无脚本步骤</td>`;
+    scriptStepsBodyEl.appendChild(emptyRow);
+    return;
+  }
+  steps.forEach((step, index) => {
+    const row = renderScriptStepRow(step, index);
+    scriptStepsBodyEl.appendChild(row);
+  });
+}
+
 function ensureOriginOptions() {
   const origins = Object.keys(dataCache.profilesByOrigin);
   originSelectEl.innerHTML = "";
@@ -113,6 +253,7 @@ function ensureOriginOptions() {
     option.textContent = "暂无站点数据";
     originSelectEl.appendChild(option);
     deleteOriginEl.disabled = true;
+    setScriptEditorDisabled(true);
     return;
   }
   deleteOriginEl.disabled = false;
@@ -122,6 +263,7 @@ function ensureOriginOptions() {
     option.textContent = origin;
     originSelectEl.appendChild(option);
   });
+  setScriptEditorDisabled(false);
 }
 
 function selectedOrigin() {
@@ -236,6 +378,92 @@ function hydrateGlobalSettings() {
 
 function hydrateSiteManagement() {
   renderMarkersTable();
+  renderScriptEditor();
+}
+
+function addScriptStepRow(defaults = null) {
+  const rows = scriptStepsBodyEl.querySelectorAll("tr[data-id]");
+  const nextIndex = rows.length;
+  const step = normalizeScriptStep(
+    defaults || {
+      id: createStepId(),
+      key: "",
+      waitMs: 0,
+      waitOffsetMs: 0
+    },
+    nextIndex
+  ) || {
+    id: createStepId(),
+    key: "",
+    waitMs: 0,
+    waitOffsetMs: 0
+  };
+
+  const emptyRow = scriptStepsBodyEl.querySelector("tr");
+  if (emptyRow && !emptyRow.dataset.id) {
+    scriptStepsBodyEl.innerHTML = "";
+  }
+  scriptStepsBodyEl.appendChild(renderScriptStepRow(step, nextIndex));
+  refreshScriptStepIndexes();
+}
+
+function collectScriptFromInputs() {
+  const rows = Array.from(scriptStepsBodyEl.querySelectorAll("tr[data-id]"));
+  const steps = [];
+  for (const row of rows) {
+    const id = row.dataset.id || createStepId();
+    const keyInput = row.querySelector('[data-field="key"]');
+    const waitInput = row.querySelector('[data-field="waitSeconds"]');
+    const waitOffsetInput = row.querySelector('[data-field="waitOffsetSeconds"]');
+    const key = keyInput instanceof HTMLInputElement ? keyInput.value.trim() : "";
+    if (!key) {
+      return { error: "按钮键值不能为空" };
+    }
+    const waitSecondsRaw = waitInput instanceof HTMLInputElement ? waitInput.value.trim() : "0";
+    const waitSeconds = Number(waitSecondsRaw);
+    if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+      return { error: "等待时间必须是大于等于 0 的数字（秒）" };
+    }
+    const waitOffsetSecondsRaw = waitOffsetInput instanceof HTMLInputElement ? waitOffsetInput.value.trim() : "";
+    const waitOffsetSeconds = waitOffsetSecondsRaw ? Number(waitOffsetSecondsRaw) : 0;
+    if (!Number.isFinite(waitOffsetSeconds) || waitOffsetSeconds < 0) {
+      return { error: "等待偏差必须是大于等于 0 的数字（秒）" };
+    }
+    steps.push({
+      id,
+      key,
+      waitMs: Math.round(waitSeconds * 1000),
+      waitOffsetMs: Math.round(waitOffsetSeconds * 1000)
+    });
+  }
+  return {
+    script: {
+      loop: Boolean(scriptLoopEl.checked),
+      steps
+    }
+  };
+}
+
+async function saveCurrentOriginScript() {
+  const origin = selectedOrigin();
+  if (!origin) {
+    setStatus("当前无可编辑站点");
+    return;
+  }
+  const profile = ensureProfile(origin);
+  if (!profile) {
+    setStatus("当前无可编辑站点");
+    return;
+  }
+  const collected = collectScriptFromInputs();
+  if (collected.error) {
+    setStatus(collected.error);
+    return;
+  }
+  profile.script = normalizeScript(collected.script);
+  await saveData(dataCache);
+  renderScriptEditor();
+  setStatus("站点脚本已保存");
 }
 
 async function saveGlobalSettings() {
@@ -297,6 +525,16 @@ async function bootstrap() {
   });
   deleteOriginEl.addEventListener("click", () => {
     void deleteCurrentOrigin();
+  });
+  addScriptStepEl.addEventListener("click", () => {
+    if (!selectedOrigin()) {
+      setStatus("请先选择一个站点");
+      return;
+    }
+    addScriptStepRow();
+  });
+  saveScriptEl.addEventListener("click", () => {
+    void saveCurrentOriginScript();
   });
 }
 

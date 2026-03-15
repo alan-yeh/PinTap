@@ -39,6 +39,10 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
 }
 
+#pintap-toolbar.script-running {
+  width: 400px;
+}
+
 #pintap-toolbar.theme-light {
   background: #ffffff;
   color: #333333;
@@ -75,6 +79,47 @@
   flex: 0 0 auto;
 }
 
+#pintap-toolbar.script-running #pintap-toolbar-controls {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0;
+}
+
+#pintap-toolbar-script-info {
+  margin-left: 15px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: left;
+  user-select: none;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#pintap-toolbar-script-info-text {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+#pintap-toolbar-script-info.is-scrolling #pintap-toolbar-script-info-text {
+  animation: pintap-script-info-scroll var(--pintap-scroll-duration, 8s) linear infinite alternate;
+}
+
+#pintap-toolbar.script-running [data-action="script-stop"] {
+  margin-left: 15px;
+}
+
+@keyframes pintap-script-info-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-1 * var(--pintap-scroll-distance, 0px)));
+  }
+}
+
 .pintap-toolbar-btn {
   width: 22px;
   height: 22px;
@@ -87,6 +132,11 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.pintap-toolbar-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .pintap-toolbar-btn img {
