@@ -6,6 +6,20 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+#pintap-edit-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+#pintap-edit-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 #pintap-toolbar {
   position: fixed;
   left: 24px;
@@ -172,6 +186,7 @@
   user-select: none;
   pointer-events: none;
 }
+
 
 .pintap-marker.editable {
   cursor: move;

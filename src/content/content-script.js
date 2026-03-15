@@ -55,6 +55,8 @@
 
   const root = document.createElement("div");
   root.id = "pintap-root";
+  const editBackdrop = document.createElement("div");
+  editBackdrop.id = "pintap-edit-backdrop";
   const markerLayer = document.createElement("div");
   markerLayer.id = "pintap-marker-layer";
   const toast = document.createElement("div");
@@ -1094,13 +1096,24 @@
     });
   }
 
+  function renderEditBackdrop() {
+    if (!isTopWindow) {
+      editBackdrop.classList.remove("visible");
+      return;
+    }
+    const shouldShowBackdrop = settings.extensionEnabled && settings.markersEnabled && editMode;
+    editBackdrop.classList.toggle("visible", shouldShowBackdrop);
+  }
+
   function render() {
     if (!settings.extensionEnabled || !settings.markersEnabled) {
+      editBackdrop.classList.remove("visible");
       markerLayer.innerHTML = "";
       hideClickProbe();
       syncToolbarUi();
       return;
     }
+    renderEditBackdrop();
     renderMarkers();
     if (!editMode) {
       hideClickProbe();
@@ -1368,6 +1381,7 @@
     if (document.getElementById(root.id)) {
       return true;
     }
+    root.appendChild(editBackdrop);
     root.appendChild(markerLayer);
     if (isTopWindow) {
       root.appendChild(toolbar);
