@@ -706,7 +706,7 @@
     if (toggleButton instanceof HTMLButtonElement) {
       toggleButton.title = settings.markersEnabled ? "禁用标识监听" : "启用标识监听";
       toggleButton.dataset.fallbackText = settings.markersEnabled ? "关" : "开";
-      toggleButton.dataset.iconName = settings.markersEnabled ? "pause" : "play-circle";
+      toggleButton.dataset.iconName = settings.markersEnabled ? "eye" : "eye-close";
       const fallback = toggleButton.querySelector("span");
       if (fallback instanceof HTMLElement) {
         fallback.textContent = toggleButton.dataset.fallbackText;
@@ -740,7 +740,7 @@
     const toggleEnabledBtn = createToolbarButton({
       action: "toggle-enabled",
       title: "禁用标识监听",
-      iconName: "pause",
+      iconName: "eye",
       fallbackText: "关",
       onClick: async () => {
         await setMarkersEnabled(!settings.markersEnabled);
